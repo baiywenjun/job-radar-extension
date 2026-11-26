@@ -96,12 +96,13 @@ check('降级：仍能命中技术词', ev2.strong.length >= 2, '实际 ' + ev2.
 setup('<div class="nothing">加载中…</div>', 'https://www.zhipin.com/job_detail/ghi789.html', 'BOSS直聘');
 let f3 = E.extract(A.SITE_ADAPTERS[0]);
 
-check('空页：不抛异常且 JD 为空', !f3 || !f3.jdText, f3 && ('实际 ' + f3.jdText));
+check('空页：不抛异常且无有效字段', f3 === null || (!f3.jobTitle && !f3.company && !f3.jdText),
+  f3 && ('实际 ' + JSON.stringify({ t: f3.jobTitle, c: f3.company, jd: f3.jdText.length })));
 
-if (f3) {
-  let ev3 = R.evaluate({ jobTitle: f3.jobTitle || '', jdText: f3.jdText || '', salaryText: '', experienceText: '' });
-  check('空页：判为信息不足', ev3.grade === 'insufficient', '实际 ' + ev3.grade);
-}
+// 空页应返回 null 交给上层显示诊断卡，而不是伪造字段；
+// 规则引擎对空文本的判定单独验证，保证这条断言恒定执行。
+let ev3 = R.evaluate({ jobTitle: '', jdText: '', salaryText: '', experienceText: '' });
+check('空页：无内容时判为信息不足', ev3.grade === 'insufficient', '实际 ' + ev3.grade);
 
 /* ---------- 用例 4：猎聘结构 ---------- */
 const liepinHtml = `
@@ -128,6 +129,116 @@ check('猎聘：JD 走选择器', f4 && f4.sources.jd === '选择器', f4 && ('�
 
 let ev4 = R.evaluate({ jobTitle: f4.jobTitle, jdText: f4.jdText, salaryText: f4.salaryText, experienceText: f4.experienceText });
 check('猎聘：族群判为 AI 应用', ev4.group === 'A', '实际 ' + ev4.group + ' ' + ev4.groupShort);
+
+/* ---------- 用例 4.5：BOSS 搜索列表 + 右侧滑出详情（现场截图结构） ----------
+   现场问题：左侧卡片与右侧详情类名重复，全文档 querySelector 抓到了左侧
+   卡片里的「FDE交付」当职位名；公司从页面标题解析成「2026年人才招聘信息」；
+   薪资与经验因新版侧滑面板类名与旧详情页不同而抽不到。
+   修复思路：以 JD 容器为锚点向上圈定详情区，所有字段只在区内抽取。 */
+const bossSplitHtml = `
+<div class="page">
+  <div class="job-list">
+    <div class="job-card">
+      <div class="job-title"><span class="name">AI部署工程师（FDE）</span></div>
+      <div class="salary">11-12K</div>
+    </div>
+    <div class="job-card">
+      <div class="job-title"><span class="name">飞书 FDE交付工程师</span></div>
+      <div class="salary">8-13K</div>
+    </div>
+    <div class="job-card">
+      <div class="job-title"><span class="name">FDE（前线部署工程师）</span></div>
+      <div class="salary">6-7K</div>
+    </div>
+    <div class="job-card">
+      <div class="job-title"><span class="name">AI交付工程师</span></div>
+      <div class="salary">10-18K</div>
+    </div>
+  </div>
+  <div class="detail-panel">
+    <div class="detail-header">
+      <h1>AI前沿部署工程师（FDE）</h1>
+      <span class="pay-text">13-25K</span>
+      <div class="req-tags"><span>广州</span><span>3-5年</span><span>本科</span></div>
+      <div class="comp"><a class="company-link">广东保伦电子</a></div>
+    </div>
+    <div class="detail-body">
+      <h3>职位描述</h3>
+      <p>一、岗位定位：作为深入一线的复合型技术交付角色，承担两类项目的落地交付。</p>
+      <p>二、主要工作职责：需求调研与方案转化，梳理业务场景与系统集成需求。</p>
+      <p>三、智能体项目交付：负责客户本地或云端环境的部署、配置、调试与上线。</p>
+      <p>要求具备 3-5 年相关经验，本科及以上学历，能适应出差。</p>
+    </div>
+  </div>
+</div>
+`;
+
+setup(bossSplitHtml, 'https://www.zhipin.com/web/geek/job?query=FDE&city=101280100',
+  'FDE招聘 - 2026年人才招聘信息 - BOSS直聘');
+const fSplit = E.extract(A.SITE_ADAPTERS[0]);
+
+check('BOSS分栏：职位名不取左侧列表', fSplit && fSplit.jobTitle === 'AI前沿部署工程师（FDE）',
+  fSplit && ('实际 ' + fSplit.jobTitle));
+check('BOSS分栏：薪资不取左侧卡片', fSplit && /13-25K/.test(fSplit.salaryText),
+  fSplit && ('实际 ' + fSplit.salaryText));
+check('BOSS分栏：经验解析', fSplit && /3-5年/.test(fSplit.experienceText),
+  fSplit && ('实际 ' + fSplit.experienceText));
+check('BOSS分栏：城市解析', fSplit && fSplit.city === '广州', fSplit && ('实际 ' + fSplit.city));
+check('BOSS分栏：公司不用站点头衔', fSplit && /保伦电子/.test(fSplit.company),
+  fSplit && ('实际 ' + fSplit.company));
+check('BOSS分栏：JD 走启发式兜底', fSplit && fSplit.sources.jd === '启发式',
+  fSplit && ('实际 ' + fSplit.sources.jd));
+
+const parsedSplit = E.parseDocTitle('FDE招聘 - 2026年人才招聘信息 - BOSS直聘');
+check('标题解析：不把站点头衔当公司', parsedSplit.company === '', '实际 ' + parsedSplit.company);
+
+/* ---------- 用例 4.6：详情区退化到含列表的容器 ----------
+   有些站点薪资区块与 JD 区块是并列的，两者的公共祖先就是整页，
+   这时「详情区」无法收窄，会连左侧列表一起圈进来。
+   靠列表项识别（同 class 兄弟 ≥3）作为最后一道防线。 */
+const bossFlattenHtml = `
+<div class="layout">
+  <div class="job-list">
+    <div class="job-card">
+      <div class="job-title"><span class="name">AI部署工程师</span></div>
+      <div class="salary">11-12K</div>
+    </div>
+    <div class="job-card">
+      <div class="job-title"><span class="name">飞书 FDE交付工程师</span></div>
+      <div class="salary">8-13K</div>
+    </div>
+    <div class="job-card">
+      <div class="job-title"><span class="name">AI交付工程师</span></div>
+      <div class="salary">10-18K</div>
+    </div>
+    <div class="job-card">
+      <div class="job-title"><span class="name">实施工程师</span></div>
+      <div class="salary">6-9K</div>
+    </div>
+  </div>
+  <div class="main-col">
+    <div class="head-block"><h1>目标岗位：FDE 交付专家</h1></div>
+    <div class="pay-block"><span>30-50K</span><span>4-6年</span></div>
+  </div>
+  <div class="jd-block">
+    <h3>岗位职责</h3>
+    <p>负责客户现场的大模型应用交付，梳理业务场景并完成方案设计与部署上线。</p>
+    <p>需要对接客户现有系统与 API，完成权限认证、数据治理与私有化部署调试。</p>
+    <p>要求具备 4-6 年相关经验，本科及以上学历，能独立排查运行期故障。</p>
+  </div>
+</div>
+`;
+
+setup(bossFlattenHtml, 'https://www.zhipin.com/web/geek/job?query=FDE',
+  'FDE招聘 - 2026年人才招聘信息 - BOSS直聘');
+const fFlat = E.extract(A.SITE_ADAPTERS[0]);
+
+check('列表防线：职位名不取列表项', fFlat && fFlat.jobTitle === '目标岗位：FDE 交付专家',
+  fFlat && ('实际 ' + fFlat.jobTitle));
+check('列表防线：薪资不取列表项', fFlat && /30-50K/.test(fFlat.salaryText),
+  fFlat && ('实际 ' + fFlat.salaryText));
+check('列表防线：经验取详情块', fFlat && /4-6年/.test(fFlat.experienceText),
+  fFlat && ('实际 ' + fFlat.experienceText));
 
 /* ---------- 用例 5：详情页判定 ---------- */
 check('详情页判定：BOSS 详情页', A.isDetailPage(A.SITE_ADAPTERS[0], 'https://www.zhipin.com/job_detail/abc.html') === true);

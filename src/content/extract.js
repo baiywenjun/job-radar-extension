@@ -19,6 +19,9 @@
   var EXP_RE = /(\d+)\s*[-~至]\s*(\d+)\s*年|(\d+)\s*年以上|应届|经验不限|在校/;
   var EDU_RE = /(本科|硕士|博士|大专|中专|学历不限|高中)/;
 
+  /* 由城市表构建，供详情区内定位城市文本使用 */
+  var CITY_RE = new RegExp(CITIES.join('|'));
+
   /* 取节点可见文本：innerText 保留段落换行，降级用 textContent */
   function nodeText(el) {
     if (!el) return '';
@@ -33,7 +36,7 @@
   }
 
   function pickText(selectors) {
-    if (!selectors || !selectors.length) return { text: '', sel: null };
+    if (!selectors || !selectors.length) return { text: '', sel: null, el: null };
     for (var i = 0; i < selectors.length; i++) {
       var el = null;
       try {
@@ -43,9 +46,57 @@
       }
       if (!el) continue;
       var t = nodeText(el);
-      if (t && t.length >= 2) return { text: t, sel: selectors[i] };
+      if (t && t.length >= 2) return { text: t, sel: selectors[i], el: el };
     }
-    return { text: '', sel: null };
+    return { text: '', sel: null, el: null };
+  }
+
+  /* 判断元素是否位于列表卡片内：向上 3 层查找，若某层存在 3 个以上同 class 兄弟，
+     即认定为列表项。向上查找是必须的——真正的列表容器是卡片，而薪资、职位名
+     往往是卡片里的叶子节点，只看自身判不出来。 */
+  function looksLikeListItem(el) {
+    var cur = el;
+    for (var depth = 0; depth < 3 && cur; depth++) {
+      var p = cur.parentElement;
+      if (!p) break;
+      var cls = cur.className;
+      if (typeof cls === 'string' && cls) {
+        var same = 0;
+        for (var i = 0; i < p.children.length; i++) {
+          var sib = p.children[i];
+          if (typeof sib.className === 'string' && sib.className === cls) {
+            same++;
+            if (same >= 3) return true;
+          }
+        }
+      }
+      cur = p;
+    }
+    return false;
+  }
+
+  /* 只在指定根节点内按选择器抽取。
+     必要性：BOSS 搜索结果页是「左列表 + 右侧滑出详情」，同一个类名可能在
+     左侧卡片里也有，全文档 querySelector 会抓到列表项而不是当前详情。
+     若命中的全是列表项，返回空交给结构推断处理，不退回第一个候选。 */
+  function pickIn(root, selectors) {
+    if (!root || !selectors || !selectors.length) return { text: '', sel: null, el: null };
+    for (var i = 0; i < selectors.length; i++) {
+      var els = [];
+      try {
+        els = root.querySelectorAll(selectors[i]);
+      } catch (e) {
+        els = [];
+      }
+      for (var j = 0; j < els.length; j++) {
+        var cand = els[j];
+        if (looksLikeListItem(cand)) continue;
+        var t = nodeText(cand);
+        if (!t || t.length < 2) continue;
+        return { text: t, sel: selectors[i], el: cand };
+      }
+    }
+    return { text: '', sel: null, el: null };
   }
 
   function findCity(text) {
@@ -85,8 +136,16 @@
       })
       .filter(function (x) { return x && x.length > 1; });
 
+    /* 站点头衔片段：BOSS 标题形如「FDE招聘 - 2026年人才招聘信息 - BOSS直聘」，
+       「2026年人才招聘信息」含「信息」二字，会被公司名规则误判成公司。
+       只在判定公司时跳过，不去删 parts —— 否则「FDE招聘」这类合法职位名片段会被误删。 */
+    function isSiteNoise(x) {
+      return /招聘|人才|求职|岗位|简历|直聘|猎聘|脉脉|国聘|网申|首页/.test(x);
+    }
+
     var companyIdx = -1;
     for (var i = 0; i < parts.length; i++) {
+      if (isSiteNoise(parts[i])) continue;
       if (/有限公司|股份|集团|科技|网络|信息|技术|研究院|银行|证券|保险|大学|数字|数据/.test(parts[i])) {
         companyIdx = i;
         break;
@@ -102,11 +161,15 @@
   }
 
   function sanitizeJobTitle(t) {
-    return U.clean(t)
+    var s = U.clean(t)
       .replace(/^(急聘|急招|高薪招聘|诚聘)[:：\s]*/, '')
       .replace(/\s*[-_|]\s*招聘$/, '')
+      .replace(/招聘$/, '')
       .replace(/^【[^】]*】\s*/, '')
       .slice(0, 80);
+    // 纯站点名不是职位名（空页或加载中时标题常只有站名）
+    if (/^(BOSS直聘|BOSS|猎聘网|猎聘|脉脉|国聘|智联招聘|前程无忧|拉勾|加载中)$/i.test(s)) return '';
+    return s;
   }
 
   function sanitizeCompany(t) {
@@ -119,7 +182,43 @@
   /* JD 启发式：找包含职责/要求关键词、文本量最大的块 */
   var JD_KEY = /岗位职责|职位描述|工作职责|任职要求|岗位要求|职位要求|工作内容|职责描述|岗位描述|你将负责|我们希望你/;
 
+  /* 找「岗位职责/任职要求」关键词所在的最近语义容器。
+     必须取最小的够用块：若按「文本最长的含关键词块」来选，会一路选到 body，
+     后续以它为锚点上溯圈定详情区时，必然把左侧列表一起圈进来。 */
+  function findJdAnchor() {
+    if (!document.body || typeof document.createTreeWalker !== 'function') return null;
+    var walker = null;
+    try {
+      // 用常量 4（SHOW_TEXT）而非 NodeFilter.SHOW_TEXT：
+      // NodeFilter 是 window 上的全局对象，在隔离世界以外的环境（如测试）里不存在，
+      // 一旦取不到就会抛错并被 catch 吞掉，静默退化为兜底逻辑。
+      walker = document.createTreeWalker(document.body, 4, null);
+    } catch (e) {
+      return null;
+    }
+    var node;
+    var guard = 0;
+    while ((node = walker.nextNode()) && guard++ < 20000) {
+      var t = node.nodeValue || '';
+      if (!JD_KEY.test(t)) continue;
+      var cur = node.parentElement;
+      for (var i = 0; i < 8 && cur; i++) {
+        var len = (cur.textContent || '').length;
+        if (len >= 100 && len <= 20000) return cur;
+        cur = cur.parentElement;
+      }
+      return node.parentElement;
+    }
+    return null;
+  }
+
   function heuristicJD() {
+    var anchor = findJdAnchor();
+    if (anchor) {
+      var at = nodeText(anchor);
+      if (at.length >= 100) return { el: anchor, text: at };
+    }
+
     var nodes = document.querySelectorAll('div, section, article, main');
     var best = null;
     var bestLen = 0;
@@ -138,10 +237,81 @@
         best = el;
       }
     }
-    if (best) return nodeText(best);
+    if (best) return { el: best, text: nodeText(best) };
 
     var main = document.querySelector('main, article, [class*="job-detail"], [class*="jobDetail"]');
-    return main ? nodeText(main).slice(0, 20000) : '';
+    if (main) return { el: main, text: nodeText(main).slice(0, 20000) };
+    return { el: null, text: '' };
+  }
+
+  /* 以 JD 容器为锚点向上爬，找到同时含薪资与经验的最小祖先，作为「详情区」。
+     这样不必依赖具体类名：站点改版后类名换了，结构关系通常还在。
+     上限 12000 字是为了防止一路爬到整页（那样会把左侧列表也圈进来）。 */
+  function findDetailScope(anchorEl) {
+    if (!anchorEl) return null;
+    var el = anchorEl;
+    for (var i = 0; i < 12; i++) {
+      if (!el.parentElement) break;
+      el = el.parentElement;
+      var t = '';
+      try {
+        t = el.textContent || '';
+      } catch (e) {
+        break;
+      }
+      if (!t) continue;
+      if (t.length > 12000) break;
+      if (SALARY_RE.test(t) && EXP_RE.test(t)) return el;
+    }
+    return null;
+  }
+
+  /* 在根节点内找第一个「文本匹配正则」的叶子节点 */
+  function findLeafText(root, re, maxLen) {
+    if (!root) return null;
+    var nodes = root.querySelectorAll('*');
+    var limit = Math.min(nodes.length, 3000);
+    for (var i = 0; i < limit; i++) {
+      var el = nodes[i];
+      if (el.children.length > 1) continue;
+      if (looksLikeListItem(el)) continue;
+      var t = U.clean(el.textContent);
+      if (!t || t.length > maxLen) continue;
+      var m = t.match(re);
+      if (m) return { el: el, text: m[0] };
+    }
+    return null;
+  }
+
+  /* 详情区内的标题兜底：取第一个不像薪资/经验的标题元素 */
+  function guessTitleIn(scope) {
+    if (!scope) return '';
+    var heads = scope.querySelectorAll('h1, h2, h3');
+    for (var i = 0; i < heads.length; i++) {
+      var t = U.clean(heads[i].textContent);
+      if (!t || t.length < 2 || t.length > 60) continue;
+      if (SALARY_RE.test(t) || EXP_RE.test(t)) continue;
+      if (/岗位职责|职位描述|任职要求|公司介绍/.test(t)) continue;
+      return sanitizeJobTitle(t);
+    }
+    return '';
+  }
+
+  /* 详情区内的公司名兜底：靠工商后缀识别，比类名稳 */
+  function guessCompanyIn(scope) {
+    if (!scope) return '';
+    var nodes = scope.querySelectorAll('a, span, h3, h4, div');
+    var limit = Math.min(nodes.length, 2500);
+    for (var i = 0; i < limit; i++) {
+      var el = nodes[i];
+      if (el.children.length > 1) continue;
+      var t = U.clean(el.textContent);
+      if (!t || t.length < 4 || t.length > 30) continue;
+      if (/有限公司|股份|集团|研究院|事务所|工作室|医院|学校|大学|银行|证券|保险|电子/.test(t)) {
+        return sanitizeCompany(t);
+      }
+    }
+    return '';
   }
 
   function extract(adapter) {
@@ -150,42 +320,103 @@
     var docTitle = document.title || '';
     var parsed = parseDocTitle(docTitle);
 
-    var t = pickText(sel.jobTitle);
-    var jobTitle = sanitizeJobTitle(t.text) || sanitizeJobTitle(parsed.jobTitle);
-    var jobTitleSource = t.sel ? '选择器' : (parsed.jobTitle ? '标题推断' : '未取到');
-
-    var c = pickText(sel.company);
-    var company = sanitizeCompany(c.text) || sanitizeCompany(parsed.company);
-    var companySource = c.sel ? '选择器' : (parsed.company ? '标题推断' : '未取到');
-
-    var sal = pickText(sel.salary);
-    var salaryText = SalClean(sal.text) || parsed.salary;
-    var salarySource = sal.sel ? '选择器' : (parsed.salary ? '标题推断' : '未取到');
-
-    var meta = pickText(sel.meta);
-    var metaText = meta.text || '';
-
-    var city = findCity(metaText) || parsed.city;
-    var citySource = metaText && findCity(metaText) ? '选择器' : (parsed.city ? '标题推断' : '未取到');
-
-    var expMatch = metaText.match(EXP_RE) || parsed.experience;
-    var experienceText = typeof expMatch === 'string' ? expMatch : (expMatch ? expMatch[0] : '');
-    var eduMatch = metaText.match(EDU_RE);
-
-    var act = pickText(sel.active);
-    var activeText = U.ellipsis(act.text, 40);
-
-    var j = pickText(sel.jd);
-    var jdText = j.text;
-    var jdSource = j.sel ? '选择器' : '未取到';
-    if (!jdText || jdText.length < 120) {
+    /* ---- 第一步：先定位 JD，并以其为锚点圈定「详情区」 ----
+       BOSS 搜索结果页是「左侧列表 + 右侧滑出详情」，两边的类名可能重复。
+       全文档 querySelector 会抓到左侧卡片的职位名（实测抽成「FDE交付」，
+       而那是左侧第三个列表项）。所以先拿 JD 元素，向上确定详情面板范围，
+       后面所有字段都只在这个范围内找。 */
+    var jdRes = pickText(sel.jd);
+    var jdSource = jdRes.sel ? '选择器' : '未取到';
+    if (!jdRes.text || jdRes.text.length < 120) {
       var h = heuristicJD();
-      if (h && h.length > jdText.length) {
-        jdText = h;
+      if (h.text && h.text.length > jdRes.text.length) {
+        jdRes = { text: h.text, sel: null, el: h.el };
         jdSource = '启发式';
       }
     }
-    jdText = U.clean(jdText).slice(0, 20000);
+    var scope = findDetailScope(jdRes.el);
+    var scopeTag = scope ? '选择器·区' : '选择器';
+
+    /* ---- 第二步：逐字段抽取，优先限定在详情区内 ---- */
+    var t = scope ? pickIn(scope, sel.jobTitle) : pickText(sel.jobTitle);
+    var jobTitle = sanitizeJobTitle(t.text);
+    var jobTitleSource = t.sel ? scopeTag : '';
+    if (!jobTitle && scope) {
+      jobTitle = guessTitleIn(scope);
+      if (jobTitle) jobTitleSource = '结构推断';
+    }
+    if (!jobTitle) {
+      jobTitle = sanitizeJobTitle(parsed.jobTitle);
+      if (jobTitle) jobTitleSource = '标题推断';
+    }
+    if (!jobTitleSource) jobTitleSource = '未取到';
+
+    var c = scope ? pickIn(scope, sel.company) : pickText(sel.company);
+    var company = sanitizeCompany(c.text);
+    var companySource = c.sel ? scopeTag : '';
+    if (!company && scope) {
+      company = guessCompanyIn(scope);
+      if (company) companySource = '结构推断';
+    }
+    if (!company) {
+      company = sanitizeCompany(parsed.company);
+      if (company) companySource = '标题推断';
+    }
+    if (!companySource) companySource = '未取到';
+
+    var sal = scope ? pickIn(scope, sel.salary) : pickText(sel.salary);
+    var salaryText = SalClean(sal.text);
+    var salarySource = sal.sel ? scopeTag : '';
+    if (!salaryText && scope) {
+      var salEl = findLeafText(scope, SALARY_RE, 24);
+      if (salEl) {
+        salaryText = salEl.text;
+        salarySource = '结构推断';
+      }
+    }
+    if (!salaryText && parsed.salary) {
+      salaryText = parsed.salary;
+      salarySource = '标题推断';
+    }
+    if (!salarySource) salarySource = '未取到';
+
+    var meta = scope ? pickIn(scope, sel.meta) : pickText(sel.meta);
+    var metaText = meta.text || '';
+
+    var city = findCity(metaText);
+    var citySource = city ? scopeTag : '';
+    if (!city && scope) {
+      var cityEl = findLeafText(scope, CITY_RE, 30);
+      if (cityEl) {
+        city = findCity(cityEl.text);
+        if (city) citySource = '结构推断';
+      }
+    }
+    if (!city && parsed.city) {
+      city = parsed.city;
+      citySource = '标题推断';
+    }
+    if (!citySource) citySource = '未取到';
+
+    var experienceText = '';
+    var expMatch = metaText.match(EXP_RE);
+    if (expMatch) experienceText = expMatch[0];
+    if (!experienceText && scope) {
+      var expEl = findLeafText(scope, EXP_RE, 16);
+      if (expEl) experienceText = expEl.text;
+    }
+    if (!experienceText && parsed.experience) experienceText = parsed.experience;
+
+    var eduMatch = metaText.match(EDU_RE);
+    if (!eduMatch && scope) {
+      var eduEl = findLeafText(scope, EDU_RE, 8);
+      if (eduEl) eduMatch = eduEl.text.match(EDU_RE);
+    }
+
+    var act = scope ? pickIn(scope, sel.active) : pickText(sel.active);
+    var activeText = U.ellipsis(act.text, 40);
+
+    var jdText = U.clean(jdRes.text).slice(0, 20000);
 
     if (!jobTitle && !company && !jdText) return null;
 
