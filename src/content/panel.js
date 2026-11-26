@@ -25,6 +25,8 @@
 }
 .jr-head{display:flex;align-items:center;gap:8px;padding:11px 13px;border-bottom:1px solid var(--soft);flex:0 0 auto}
 .jr-brand{display:flex;align-items:center;gap:7px;font-weight:700;font-size:13px;letter-spacing:.2px}
+.jr-busy{font-size:10.5px;color:var(--blue);background:var(--bluebg);border:1px solid var(--blueline);
+  padding:1px 6px;border-radius:10px;white-space:nowrap}
 .jr-dot{width:7px;height:7px;border-radius:50%;background:var(--blue);box-shadow:0 0 0 3px var(--bluebg)}
 .jr-head .jr-spacer{flex:1}
 .jr-icon{border:1px solid var(--line);background:#fff;color:var(--ink3);width:24px;height:24px;
@@ -97,9 +99,13 @@
   var lastData = null;
   var handlers = {};
   var bound = false;
+  var busyText = '';
 
   function mount() {
     if (host && document.documentElement.contains(host)) return;
+    // 宿主可能被页面 SPA 整体重绘移除。重建后 shadow 是新对象，
+    // 必须重新绑定事件，否则所有按钮点击都会失效。
+    if (host) bound = false;
     host = document.createElement('div');
     host.id = HOST_ID;
     host.style.cssText =
@@ -121,7 +127,17 @@
     mount();
     handlers = h || handlers;
     lastData = data;
+    busyText = '';
     host.style.display = 'block';
+    render();
+  }
+
+  /* 切换岗位时的等待态：保留旧面板内容、只加一个小标签。
+     SPA 详情替换存在「旧详情已清空、新详情未到」的空窗，
+     此时隐藏面板会让用户以为插件失效。 */
+  function setBusy(text) {
+    busyText = text || '';
+    if (!lastData) return;
     render();
   }
 
@@ -132,6 +148,7 @@
     mount();
     host.style.display = 'block';
     lastData = null;
+    busyText = '';
     var body = (lines || []).map(function (l) {
       return '<div class="jr-f"><span class="v">' + esc(l) + '</span></div>';
     }).join('');
@@ -239,6 +256,7 @@
       '<div class="jr-panel' + (collapsed ? ' collapsed' : '') + '">' +
       '<div class="jr-head">' +
       '<div class="jr-brand"><span class="jr-dot"></span>岗位雷达</div>' +
+      (busyText ? '<span class="jr-busy">' + esc(busyText) + '</span>' : '') +
       '<div class="jr-spacer"></div>' +
       '<button class="jr-icon" data-act="re-extract" title="重新抽取">↻</button>' +
       '<button class="jr-icon" data-act="toggle" title="折叠 / 展开">' + (collapsed ? '＋' : '－') + '</button>' +
@@ -272,8 +290,8 @@
   }
 
   function bind() {
-    // 事件绑定依赖 shadow root 已存在，所以先确保挂载，再做一次性绑定
-    if (!shadow) mount();
+    // shadow 指向旧节点时（宿主被移除过）也要重建，不能只判断 !shadow
+    if (!shadow || !host || !document.documentElement.contains(host)) mount();
     if (bound) return;
     bound = true;
     shadow.addEventListener('click', function (e) {
@@ -307,6 +325,7 @@
     show: show,
     notice: notice,
     hide: hide,
+    setBusy: setBusy,
     markSaved: markSaved,
     bind: bind,
     getData: function () { return lastData; }

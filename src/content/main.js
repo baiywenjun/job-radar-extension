@@ -6,6 +6,7 @@
   'use strict';
 
   var TAG = '[岗位雷达]';
+  var HOST_ID = 'jr-radar-host';
 
   var U = window.JR_UTIL;
   var R = window.JR_RULES;
@@ -18,7 +19,12 @@
   var lastHref = location.href;
   var lastTitle = document.title;
   var retry = 0;
-  var RETRY_MAX = 8;
+  var RETRY_MAX = 6;
+  var emptyStreak = 0;      // 连续抽不到有效岗位的次数
+  var MAX_EMPTY = 4;        // 超过才允许隐藏面板
+  var hasRendered = false;  // 是否曾成功渲染过岗位面板
+  var runTimer = null;
+  var observer = null;
 
   /* 依赖缺失不能静默 return，否则用户只看到「插件没反应」，无从排查 */
   var missing = [];
@@ -36,8 +42,13 @@
   /* 页面上的 JD 关键词，用于判断「这页是否像岗位详情」而不只依赖 URL 形态 */
   var JD_HINT = /岗位职责|职位描述|工作职责|任职要求|岗位要求|职位要求|工作内容|你将负责/;
 
+  /* 指纹带上 JD 前 120 字与 URL：切换左侧岗位时职位名 / 薪资可能相近，
+     只靠长度无法区分，指纹必须随内容本身变化。 */
   function fingerprint(f) {
-    return [f.jobTitle, f.company, f.salaryText, f.jdText.length].join('|');
+    return [
+      f.jobTitle, f.company, f.salaryText, f.jdText.length,
+      f.jdText.slice(0, 120), f.url
+    ].join('|');
   }
 
   function buildPayload(d) {
@@ -128,7 +139,7 @@
     var payload = buildPayload(data);
     chrome.runtime.sendMessage({ type: 'SAVE', payload: payload }, function (res) {
       if (chrome.runtime.lastError) {
-        console.warn('[岗位雷达] 保存失败：', chrome.runtime.lastError.message);
+        console.warn(TAG + ' 保存失败：', chrome.runtime.lastError.message);
         return;
       }
       if (res && res.ok) {
@@ -152,33 +163,62 @@
 
   function pageHasJobHint() {
     try {
-      return JD_HINT.test(document.body ? document.body.innerText.slice(0, 6000) : '');
+      var b = document.body;
+      // innerText 更贴近可见文本；部分环境（如 jsdom）只有 textContent
+      var txt = (b && (b.innerText || b.textContent)) || '';
+      return JD_HINT.test(txt.slice(0, 6000));
     } catch (e) {
       return false;
     }
   }
 
-  /* 页面看起来是岗位页，但这次没抽到：可能是 SPA 还在渲染，重试几次再下结论 */
-  function shouldRetry(f) {
+  /* 统一调度：URL / 标题变化、DOM 变化、重试全部共用一个防抖定时器，
+     避免多个 setTimeout 叠加导致重复渲染，或互相 clearTimeout 顶掉。 */
+  function scheduleRun(delay) {
+    if (runTimer) clearTimeout(runTimer);
+    runTimer = setTimeout(function () {
+      runTimer = null;
+      run(false);
+    }, typeof delay === 'number' ? delay : 500);
+  }
+
+  function shouldRetry(f, looksLikeJob) {
     if (retry >= RETRY_MAX) return false;
-    if (!f) return pageHasJobHint() || A.isDetailPage(adapter, location.href);
+    if (!f) return looksLikeJob;
     return f.jdText.length < 120 || !f.jobTitle;
   }
 
   function run(force) {
     if (!adapter) return;
     var f = E.extract(adapter);
+    var isDetail = A.isDetailPage(adapter, location.href);
+    var looksLikeJob = pageHasJobHint() || isDetail;
+    var minJd = isDetail ? 120 : 250;
 
     /* SPA 详情面板常延迟渲染：抽不到时先重试，不要立刻判死 */
-    if (shouldRetry(f)) {
+    if (shouldRetry(f, looksLikeJob)) {
       retry++;
-      setTimeout(function () { run(force); }, 700);
+      if (hasRendered) P.setBusy('正在读取岗位…');
+      scheduleRun(700);
       return;
     }
     retry = 0;
 
-    if (!f) {
-      if (A.isDetailPage(adapter, location.href) || pageHasJobHint()) {
+    /* 关键分支：BOSS 搜索页切换左侧岗位时，右侧详情是异步替换的，
+       存在「旧详情已清空、新详情还没到」的空窗，此时抽不到是暂时的。
+       旧逻辑在这里直接 P.hide()，而 hide 之后既没有清空指纹、也没有任何
+       触发源会再跑 run —— 面板于是永久消失。
+       现在改为：只要曾成功渲染过，就保留面板并显示等待态，等 DOM 稳定后
+       由监听或下一次调度自动更新；只有连续多次抽不到才允许隐藏。 */
+    if (!f || !f.jobTitle || f.jdText.length < minJd) {
+      emptyStreak++;
+      if (hasRendered && emptyStreak < MAX_EMPTY) {
+        P.setBusy('正在读取新岗位…');
+        scheduleRun(700);
+        return;
+      }
+      lastFingerprint = '';
+      if (looksLikeJob) {
         P.notice('未能识别本页岗位', [
           '已识别站点：' + adapter.name,
           '页面像岗位详情，但职位名、公司、JD 均抽取失败。',
@@ -192,18 +232,14 @@
       return;
     }
 
-    var isDetail = A.isDetailPage(adapter, location.href);
-    /* 不再强依赖 detailPattern：BOSS 新版是列表页右侧滑出详情，URL 不变成
-       /job_detail/，若只认标准详情路径会导致面板永不出现。
-       改以「是否抽到足够的 JD + 有职位名」为准。 */
-    if (!isDetail && (f.jdText.length < 250 || !f.jobTitle)) {
-      P.hide();
+    emptyStreak = 0;
+    var fp = fingerprint(f);
+    if (!force && fp === lastFingerprint) {
+      P.setBusy('');
       return;
     }
-
-    var fp = fingerprint(f);
-    if (!force && fp === lastFingerprint) return;
     lastFingerprint = fp;
+    hasRendered = true;
 
     var ev = R.evaluate({
       jobTitle: f.jobTitle,
@@ -250,22 +286,60 @@
     });
   }
 
-  /* 只在 URL 或标题变化时重跑；BOSS 等站点在同一 URL 内切换岗位，
-     因此额外比对页面标题。 */
+  /* 判断变更是否只由插件自身节点引起。面板内容在 Shadow DOM 内部，
+     不会冒泡到 document 的监听；但插入 / 移除 host 会。 */
+  function isOwnTarget(node) {
+    if (!node) return false;
+    var el = node.nodeType === 1 ? node : node.parentElement;
+    if (!el) return false;
+    if (el.id === HOST_ID) return true;
+    try {
+      return !!(el.closest && el.closest('#' + HOST_ID));
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /* DOM 驱动重跑：BOSS / 脉脉 切换左侧岗位是同一 URL 内的详情替换，
+     URL 与 document.title 都可能完全不变，只靠轮询永远发现不了。
+     只监听 childList + subtree（不监听 characterData），避开倒计时、
+     骨架动画等高频文本变化；300ms 防抖等详情 DOM 稳定后再抽。
+     fingerprint 比对会拦下内容未变的重复渲染，因此多跑几次成本很低。 */
+  function startObserver() {
+    if (typeof MutationObserver === 'undefined' || !document.body) return;
+    try {
+      observer = new MutationObserver(function (records) {
+        var relevant = false;
+        for (var i = 0; i < records.length; i++) {
+          if (!isOwnTarget(records[i].target)) {
+            relevant = true;
+            break;
+          }
+        }
+        if (!relevant) return;
+        scheduleRun(300);
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      console.log(TAG + ' DOM 监听已启动');
+    } catch (e) {
+      console.warn(TAG + ' DOM 监听不可用，退化为 URL/标题轮询：' + e.message);
+    }
+  }
+
   function tick() {
+    var changed = false;
     if (location.href !== lastHref) {
       lastHref = location.href;
-      lastFingerprint = '';
-      retry = 0;
-      setTimeout(function () { run(false); }, 900);
-      return;
+      changed = true;
     }
     if (document.title !== lastTitle) {
       lastTitle = document.title;
-      lastFingerprint = '';
-      retry = 0;
-      setTimeout(function () { run(false); }, 900);
+      changed = true;
     }
+    if (!changed) return;
+    lastFingerprint = '';
+    retry = 0;
+    scheduleRun(600);
   }
 
   function init() {
@@ -280,8 +354,10 @@
     /* 监控必须无条件启动。此前若判定为「列表页」就提前 return，
        而 BOSS / 脉脉 是 SPA，从列表点进详情不会重新注入内容脚本，
        导致面板永远不出现。 */
+    P.bind();          // 先建宿主，避免它的插入触发下面的 DOM 监听
+    startObserver();
     setInterval(tick, 1300);
-    setTimeout(function () { run(false); }, 1200);
+    scheduleRun(900);
   }
 
   init();
