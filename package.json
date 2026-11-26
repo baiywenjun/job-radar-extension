@@ -1,0 +1,15 @@
+{
+  "name": "job-radar",
+  "version": "0.1.0",
+  "private": true,
+  "description": "岗位雷达 · JD 结构化记录仪（Chrome MV3 扩展）",
+  "scripts": {
+    "build:preview": "node tests/build-preview.js",
+    "test": "node tests/run-tests.js && node tests/dom-test.js && node tests/build-preview.js && node tests/preview-smoke.js"
+  },
+  "keywords": ["chrome-extension", "job-search", "jd-analysis"],
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "jsdom": "^31.0.1"
+  }
+}

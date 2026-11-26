@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>岗位雷达 · 面板预览</title>
+<style>
+  :root{--ink:#1e2532;--ink2:#4a5568;--ink3:#77839a;--line:#e2e7ef;--soft:#eef1f6;--blue:#20509b}
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:#f5f7fa;color:var(--ink);padding:0 400px 40px 0;
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    font-size:14px;line-height:1.65;-webkit-font-smoothing:antialiased;
+  }
+  .bar{
+    display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+    padding:14px 22px;background:#fff;border-bottom:1px solid var(--line);margin-bottom:22px;
+    position:sticky;top:0;z-index:5;
+  }
+  .bar b{font-size:14px}
+  .bar .hint{color:var(--ink3);font-size:12px}
+  .btns{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
+  .btns button{
+    padding:6px 11px;border:1px solid var(--line);border-radius:7px;background:#fff;
+    color:var(--ink2);font-size:12.5px;font-family:inherit;cursor:pointer
+  }
+  .btns button:hover{border-color:var(--blue);color:var(--blue)}
+  .btns button.on{background:var(--blue);border-color:var(--blue);color:#fff}
+
+  .fake{
+    background:#fff;border:1px solid var(--line);border-radius:12px;
+    padding:24px 26px 28px;max-width:700px;margin:0 auto;
+  }
+  .fake .job-banner{border-bottom:1px solid var(--soft);padding-bottom:14px;margin-bottom:16px}
+  .fake .name h1{font-size:21px;margin:0 0 6px;font-weight:700;letter-spacing:.2px}
+  .fake .salary{color:#fe574a;font-size:19px;font-weight:700;margin-bottom:8px}
+  .fake .info-primary p{margin:0;color:var(--ink3);font-size:13px}
+  .fake .company-info{margin-top:10px}
+  .fake .company-info a.company-name{color:var(--blue);text-decoration:none;font-size:13.5px;font-weight:600}
+  .fake .job-boss-info{margin:14px 0;color:var(--ink3);font-size:12.5px}
+  .fake .job-sec-text{color:var(--ink2);font-size:13.5px;white-space:pre-line}
+  .fake .job-sec-text strong{color:var(--ink)}
+  .tip{
+    max-width:700px;margin:18px auto 0;padding:12px 15px;background:#e9f0fc;
+    border-left:3px solid var(--blue);border-radius:0 7px 7px 0;color:#33465e;font-size:12.5px;line-height:1.7;
+  }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <b>面板预览</b>
+  <span class="hint">用假数据演示「抽取 → 打分 → 渲染」，不需要安装扩展</span>
+  <div class="btns" id="btns"></div>
+</div>
+
+<div id="fake" class="fake"></div>
+
+<div class="tip">
+  右侧面板就是插件在招聘详情页里注入的那一个，样式用 Shadow DOM 隔离，不会被站点 CSS 影响。<br>
+  切换上方样本可以看到：强信号、中等、外包换名、收缩岗位分别得到什么分数与档位。
+</div>
+
+<script>
+  /* 预览页没有扩展环境，这里给 chrome.runtime 打一个最小桩 */
+  window.chrome = {
+    runtime: {
+      lastError: null,
+      sendMessage: function (msg, cb) {
+        if (!cb) return;
+        setTimeout(function () {
+          if (msg && msg.type === 'SAVE') {
+            cb({ ok: true, record: { seenCount: 1, firstSeen: Date.now() } });
+          } else {
+            cb({ ok: true, record: null });
+          }
+        }, 40);
+      }
+    }
+  };
+</script>
+<script src="../src/common/util.js"></script>
+<script src="../src/common/rules.js"></script>
+<script src="../src/content/adapters.js"></script>
+<script src="../src/content/extract.js"></script>
+<script src="../src/content/panel.js"></script>
+<script src="demo.js"></script>
+</body>
+</html>
