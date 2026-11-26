@@ -150,6 +150,7 @@
   function notice(title, lines, opts) {
     mount();
     opts = opts || {};
+    if (opts.handlers) handlers = opts.handlers;
     var tone = opts.tone === 'info' ? 'info' : 'bad';
     var key = tone + '|' + title + '|' + (lines || []).join('|') + '|' + (opts.foot || '');
     if (key === noticeKey && lastData === null && host.style.display === 'block') return;
@@ -168,6 +169,14 @@
       ? '<div class="jr-note">' + esc(opts.foot) + '</div>'
       : '';
 
+    /* 站点会拦截 F12，用户拿不到 class。所以把诊断做成一个按钮：
+       点一下就把「插件看到了什么」复制到剪贴板，直接粘给维护者即可。 */
+    var acts = tone === 'bad'
+      ? '<button class="jr-btn primary" data-act="diag">复制诊断信息</button>' +
+        '<button class="jr-btn" data-act="re-extract">重新抽取</button>'
+      : '<button class="jr-btn" data-act="re-extract">重新抽取</button>' +
+        '<button class="jr-btn" data-act="diag">复制诊断</button>';
+
     root.innerHTML =
       '<div class="jr-panel">' +
       '<div class="jr-head">' +
@@ -182,6 +191,7 @@
       '</h4><div class="jr-fields">' + body + '</div></div>' +
       foot +
       '</div>' +
+      '<div class="jr-foot">' + acts + '</div>' +
       '</div>';
   }
 
@@ -326,6 +336,8 @@
         handlers.onCopy(lastData, btn);
       } else if (act === 're-extract' && handlers.onReextract) {
         handlers.onReextract();
+      } else if (act === 'diag' && handlers.onDiag) {
+        handlers.onDiag(btn);
       }
     });
   }

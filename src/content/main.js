@@ -13,6 +13,7 @@
   var E = window.JR_EXTRACT;
   var A = window.JR_ADAPTERS;
   var P = window.JR_PANEL;
+  var D = window.JR_DIAGNOSE;
 
   var adapter = null;
   var lastFingerprint = '';
@@ -35,6 +36,7 @@
   if (!E) missing.push('extract.js');
   if (!A) missing.push('adapters.js');
   if (!P) missing.push('panel.js');
+  /* diagnose.js 缺失只影响「复制诊断」按钮，不影响抽取与打分，不列入致命依赖 */
   if (missing.length) {
     console.error(TAG + ' 依赖脚本未加载：' + missing.join('、') +
       '。请到 chrome://extensions 查看该扩展的错误信息并重新加载。');
@@ -144,6 +146,59 @@
     }
   }
 
+  /* 站点拦截 F12 后用户拿不到 class，只能靠「复制诊断」把线索带出来。
+     report() 会重新跑一次抽取并附带选择器命中情况与 DOM 骨架，全程只读本页。 */
+  function onDiag(btn) {
+    var text = '';
+    if (!D) {
+      text = '诊断模块未加载，请到 chrome://extensions 重新加载扩展后再试。';
+    } else {
+      try {
+        text = D.report(adapter);
+      } catch (e) {
+        text = '诊断生成失败：' + (e && e.message);
+      }
+    }
+    copyText(text).then(function (ok) {
+      if (!btn) return;
+      var old = btn.textContent;
+      btn.textContent = ok ? '已复制 · 去粘贴给维护者' : '复制失败，请重试';
+      setTimeout(function () {
+        btn.textContent = old;
+      }, 2200);
+    });
+  }
+
+  /* 提示态也要能响应按钮，所以处理函数不依赖 P.show 先跑一遍 */
+  function handlers() {
+    return {
+      onSave: onSave,
+      onCopy: onCopy,
+      onDiag: onDiag,
+      onReextract: function () {
+        lastFingerprint = '';
+        retry = 0;
+        run(true);
+      }
+    };
+  }
+
+  /* 把「到底哪个字段空了」说清楚：旧版一律说三个全失败，用户无法判断是改版
+     还是还没渲染完，也无从决定要不要点诊断。 */
+  function diagLine(f) {
+    if (!f) return '页面里连 JD 正文都没定位到（可能仍在加载，或详情区尚未渲染）。';
+    var miss = [];
+    if (!f.jobTitle) miss.push('职位名');
+    if (!f.company) miss.push('公司名');
+    if (!f.salaryText) miss.push('薪资');
+    if (!f.experienceText) miss.push('经验');
+    if (!f.jdText || f.jdText.length < 120) miss.push('JD 正文');
+    var got = 'JD ' + (f.jdText ? f.jdText.length : 0) + ' 字' +
+      (f.salaryText ? ' · 薪资 ' + f.salaryText : '');
+    if (!miss.length) return '字段已取到，但 JD 未达判定门槛（' + got + '）';
+    return '未取到：' + miss.join('、') + '（已取到 ' + got + '）';
+  }
+
   function onSave(data) {
     var payload = buildPayload(data);
     chrome.runtime.sendMessage({ type: 'SAVE', payload: payload }, function (res) {
@@ -229,7 +284,8 @@
           '在列表中点选一个岗位后，会自动抽取并评分。'
         ], {
           tone: 'info',
-          foot: '这是正常状态，不是插件故障。'
+          foot: '这是正常状态，不是插件故障。若右侧确实已经展示了岗位详情，点「复制诊断」把结果发给维护者。',
+          handlers: handlers()
         });
         logOnce('no-pane:' + location.pathname, 'info',
           '本页暂无岗位详情（列表页或未选中岗位），已显示等待提示');
@@ -251,15 +307,15 @@
       lastFingerprint = '';
       P.notice('未能识别本页岗位', [
         '已识别站点：' + adapter.name,
-        '页面已展开岗位详情，但职位名、公司、JD 均抽取失败。',
-        '多半是该站改版后类名变化，需更新 src/content/adapters.js 中的选择器。',
+        diagLine(f),
         '当前 URL：' + location.href
       ], {
         tone: 'bad',
-        foot: '按 README 的校准章节，用 F12 取真实 class 后加到对应站点的选择器数组最前面。'
+        foot: '站点改版后类名会整体失效，且 BOSS 会拦截 F12。点下方「复制诊断信息」，把结果粘给维护者即可远程校准，不需要开发者工具。',
+        handlers: handlers()
       });
       logOnce('extract-fail:' + location.href, 'warn',
-        '抽取失败（详情已展开但字段为空）：' + adapter.name + ' / ' + location.href);
+        '抽取失败（详情已展开但关键字段为空）：' + adapter.name + ' / ' + location.href);
       return;
     }
 
@@ -296,15 +352,7 @@
       ' · JD ' + f.jdText.length + ' 字 · ' + ev.score + ' 分（' + ev.gradeLabel + '）');
 
     P.bind();
-    P.show(data, {
-      onSave: onSave,
-      onCopy: onCopy,
-      onReextract: function () {
-        lastFingerprint = '';
-        retry = 0;
-        run(true);
-      }
-    });
+    P.show(data, handlers());
 
     // 查本地库里是否已有记录，有则显示见到次数与挂牌天数
     chrome.runtime.sendMessage({ type: 'QUERY_ONE', key: key }, function (res) {

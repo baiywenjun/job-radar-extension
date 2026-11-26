@@ -98,6 +98,7 @@ w.chrome = {
   'src/common/rules.js',
   'src/content/adapters.js',
   'src/content/extract.js',
+  'src/content/diagnose.js',
   'src/content/panel.js',
   'src/content/main.js'
 ].forEach(function (rel) {

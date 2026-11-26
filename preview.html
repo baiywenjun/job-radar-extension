@@ -1256,6 +1256,138 @@
     return null;
   }
 
+  /* ---------- 几何 / 字号推断：完全不依赖类名 ----------
+     BOSS 新版 /web/geek/jobs 把类名整体换过一轮，且站点会拦截 F12，
+     无法逐个校准选择器。但版式没变：职位名一定是详情列里字号最大的短文本，
+     薪资是紧跟其后的数字块，公司名是那一行的链接。
+     用「详情列几何范围 + 计算字号」定位，跨改版更稳。 */
+
+  function rectOf(el) {
+    try {
+      return el.getBoundingClientRect();
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function numPx(v) {
+    var n = parseFloat(v);
+    return isFinite(n) ? n : 0;
+  }
+
+  function fontPx(el) {
+    try {
+      return numPx(getComputedStyle(el).fontSize);
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  /* 详情列：从 JD 容器向上爬，取最外层「左边界没有明显左移」的祖先。
+     双列布局里一旦祖先把左侧列表包进来，左边界会大幅左移，到此为止。
+     没有布局信息时（display:none、或测试环境的零尺寸）返回 null，交回旧逻辑。 */
+  function findDetailPane(jdEl) {
+    if (!jdEl) return null;
+    var r0 = rectOf(jdEl);
+    if (!r0 || r0.width < 80) return null;
+    var best = null;
+    var el = jdEl;
+    for (var i = 0; i < 15; i++) {
+      var p = el.parentElement;
+      if (!p) break;
+      var r = rectOf(p);
+      if (!r || r.width < 80) break;
+      if (r.left < r0.left - 60) break;        // 左侧又出现了一列
+      if (r.width > r0.width * 3) break;       // 宽度暴涨，说明并进了整页容器
+      best = p;
+      el = p;
+    }
+    /* 只比 JD 本身大一点点的祖先说明爬到一半就停了（内边距太深时左边界会提前
+       触发上面的 break），拿到也没有标题可用，判定失败交给结构推断。 */
+    if (!best) return null;
+    var paneLen = (best.textContent || '').length;
+    var jdLen = (jdEl.textContent || '').length;
+    if (paneLen < jdLen + 10) return null;
+    return best;
+  }
+
+  function pathOf(el, maxDepth) {
+    var out = [];
+    var cur = el;
+    while (cur && cur.nodeType === 1 && out.length < (maxDepth || 5)) {
+      var s = cur.tagName.toLowerCase();
+      var cls = typeof cur.className === 'string' ? cur.className.trim() : '';
+      if (cls) s += '.' + cls.split(/\s+/).slice(0, 2).join('.');
+      if (cur.id) s = '#' + cur.id + ' ' + s;
+      out.unshift(s);
+      cur = cur.parentElement;
+    }
+    return out.join(' > ');
+  }
+
+  /* 标题类短文本：不能是薪资 / 年限 / 学历 / 栏目名 */
+  var TITLE_BLOCKLIST = /^(首页|返回|上一页|下一页|职位描述|岗位职责|任职要求|岗位要求|公司介绍|工商信息|招聘信息|查看全部|相似职位|微信扫码|举报|收藏|分享)$/;
+
+  /* 只用字号选标题：改版后类名不可靠，但「标题字号明显大于正文」这条视觉规律成立。 */
+  function guessTitleBySize(pane, jdEl) {
+    if (!pane) return '';
+    var nodes = pane.querySelectorAll('*');
+    var limit = Math.min(nodes.length, 3000);
+    var best = null;
+    var maxFs = 0;
+    for (var i = 0; i < limit; i++) {
+      var el = nodes[i];
+      if (el.children.length > 1) continue;
+      if (jdEl && jdEl.contains && jdEl.contains(el)) continue;
+      if (looksLikeListItem(el)) continue;
+      var t = U.clean(el.textContent);
+      if (!t || t.length < 2 || t.length > 40) continue;
+      if (TITLE_BLOCKLIST.test(t)) continue;
+      if (!validJobTitle(t)) continue;
+      var fs = fontPx(el);
+      if (fs <= 0 || fs < 15) continue;   // 正文级字号不可能是标题
+      var r = rectOf(el);
+      var top = r ? r.top : 0;
+      if (!best || fs > maxFs + 0.4 ||
+          (Math.abs(fs - maxFs) <= 0.4 && top < best.top)) {
+        maxFs = Math.max(maxFs, fs);
+        best = { text: t, top: top, fs: fs };
+      }
+    }
+    return best ? sanitizeJobTitle(best.text) : '';
+  }
+
+  /* 公司名：工商后缀最可靠；中电金信、某某院 这类没有后缀的，靠「是链接」来认。 */
+  var COMPANY_NOISE = /职位描述|岗位职责|任职要求|公司介绍|工商信息|查看全部|相似职位|收藏|举报|分享|微信扫码|立即沟通|继续沟通|投简历|首页|返回/;
+
+  function guessCompanyByPane(pane, jdEl, jobTitle) {
+    if (!pane) return '';
+    var nodes = pane.querySelectorAll('*');
+    var limit = Math.min(nodes.length, 3000);
+    var suffixed = '';
+    var firstLink = '';
+    for (var i = 0; i < limit; i++) {
+      var el = nodes[i];
+      if (el.children.length > 1) continue;
+      if (jdEl && jdEl.contains && jdEl.contains(el)) continue;
+      if (looksLikeListItem(el)) continue;
+      var t = U.clean(el.textContent);
+      if (!t || t.length < 2 || t.length > 30) continue;
+      if (jobTitle && t === jobTitle) continue;
+      if (COMPANY_NOISE.test(t)) continue;
+      if (INDUSTRY_NOISE.test(t)) continue;
+      if (SALARY_RE.test(t) || EXP_STRICT_RE.test(t) || EDU_RE.test(t)) continue;
+      if (COMPANY_SUFFIX.test(t)) {
+        if (!suffixed) suffixed = t;
+        continue;
+      }
+      if (el.tagName === 'A' && !firstLink && !findCity(t)) firstLink = t;
+    }
+    if (suffixed) return sanitizeCompany(suffixed);
+    if (firstLink) return sanitizeCompany(firstLink);
+    return '';
+  }
+
   /* 招聘者信息常被宽泛的 `.name` 选择器命中（实测抽成「李润葳 刚刚活跃」），
      这里做一次合理性校验，不通过就交给标题推断。 */
   var TITLE_NOISE = /刚刚活跃|今日活跃|在线|回复率|招聘者|HR|猎头|职位详情|立即沟通|收藏|BOSS直聘/;
@@ -1288,22 +1420,11 @@
   var INDUSTRY_NOISE = /^(电子商务|互联网|计算机软件|计算机服务|IT服务|人工智能|新能源|咨询服务|贸易|进出口|批发|零售|金融|教育|医疗|游戏|广告|传媒|物流|房地产|信息服务|电子技术)$/;
   var COMPANY_SUFFIX = /有限公司|股份|集团|研究院|事务所|工作室|医院|学校|大学|银行|证券|保险|科技|网络|技术|数字|数据|智能|电子/;
 
-  /* 详情区内的公司名兜底：靠工商后缀识别，比类名稳 */
-  function guessCompanyIn(scope, jdEl) {
-    if (!scope) return '';
-    var nodes = scope.querySelectorAll('a, span, h3, h4, div');
-    var limit = Math.min(nodes.length, 2500);
-    for (var i = 0; i < limit; i++) {
-      var el = nodes[i];
-      if (el.children.length > 1) continue;
-      if (jdEl && jdEl.contains && jdEl.contains(el)) continue;
-      if (looksLikeListItem(el)) continue;
-      var t = U.clean(el.textContent);
-      if (!t || t.length < 4 || t.length > 30) continue;
-      if (INDUSTRY_NOISE.test(t)) continue;
-      if (COMPANY_SUFFIX.test(t)) return sanitizeCompany(t);
-    }
-    return '';
+  /* 详情区内的公司名兜底：靠工商后缀识别，比类名稳。
+     「中电金信」这类没有后缀的公司名只能靠「是链接」来认，所以两种线索都收。
+     有 pane 时传 pane，没有时传 scope，算法相同。 */
+  function guessCompanyIn(scope, jdEl, jobTitle) {
+    return guessCompanyByPane(scope, jdEl, jobTitle);
   }
 
   function extract(adapter) {
@@ -1327,8 +1448,10 @@
       }
     }
     var jdEl = jdRes.el;
-    var scope = findDetailScope(jdRes.el, jdEl);
-    var scopeTag = scope ? '选择器·区' : '选择器';
+    /* 详情列优先用几何判定（不依赖类名，抗改版），失败再退回结构推断 */
+    var pane = findDetailPane(jdEl);
+    var scope = pane || findDetailScope(jdRes.el, jdEl);
+    var scopeTag = pane ? '详情区' : (scope ? '选择器·区' : '选择器');
 
     /* ---- 第二步：逐字段抽取，优先限定在详情区内 ---- */
     /* 收窄失败时退回全页，但依然走 pickIn —— 它会跳过重复卡片。
@@ -1339,7 +1462,8 @@
     var jobTitle = validJobTitle(t.text) ? sanitizeJobTitle(t.text) : '';
     var jobTitleSource = (t.sel && jobTitle) ? scopeTag : '';
     if (!jobTitle && scope) {
-      jobTitle = guessTitleIn(scope, jdEl);
+      /* 类名失效时先按字号认标题，再退回 h1/h2/h3 */
+      jobTitle = guessTitleBySize(scope, jdEl) || guessTitleIn(scope, jdEl);
       if (jobTitle) jobTitleSource = '结构推断';
     }
     if (!jobTitle) {
@@ -1350,9 +1474,9 @@
 
     var c = pickIn(pageRoot, sel.company);
     var company = sanitizeCompany(c.text);
-    var companySource = c.sel ? scopeTag : '';
+    var companySource = (c.sel && company) ? scopeTag : '';
     if (!company && scope) {
-      company = guessCompanyIn(scope, jdEl);
+      company = guessCompanyIn(scope, jdEl, jobTitle);
       if (company) companySource = '结构推断';
     }
     if (!company) {
@@ -1363,7 +1487,7 @@
 
     var sal = pickIn(pageRoot, sel.salary);
     var salaryText = SalClean(sal.text);
-    var salarySource = sal.sel ? scopeTag : '';
+    var salarySource = (sal.sel && salaryText) ? scopeTag : '';
     if (!salaryText && scope) {
       var salEl = findLeafText(scope, SALARY_RE, 24, jdEl);
       if (salEl) {
@@ -1467,6 +1591,12 @@
     hasDetailPane: hasDetailPane,
     parseDocTitle: parseDocTitle,
     findCity: findCity,
+    /* 供诊断模块使用：把「定位到了哪一段 DOM」一并交代出来，便于远程校准 */
+    findJdAnchor: findJdAnchor,
+    findDetailPane: findDetailPane,
+    pathOf: pathOf,
+    rectOf: rectOf,
+    fontPx: fontPx,
     CITIES: CITIES
   };
 })(typeof window !== 'undefined' ? window : globalThis);
@@ -1625,6 +1755,7 @@
   function notice(title, lines, opts) {
     mount();
     opts = opts || {};
+    if (opts.handlers) handlers = opts.handlers;
     var tone = opts.tone === 'info' ? 'info' : 'bad';
     var key = tone + '|' + title + '|' + (lines || []).join('|') + '|' + (opts.foot || '');
     if (key === noticeKey && lastData === null && host.style.display === 'block') return;
@@ -1643,6 +1774,14 @@
       ? '<div class="jr-note">' + esc(opts.foot) + '</div>'
       : '';
 
+    /* 站点会拦截 F12，用户拿不到 class。所以把诊断做成一个按钮：
+       点一下就把「插件看到了什么」复制到剪贴板，直接粘给维护者即可。 */
+    var acts = tone === 'bad'
+      ? '<button class="jr-btn primary" data-act="diag">复制诊断信息</button>' +
+        '<button class="jr-btn" data-act="re-extract">重新抽取</button>'
+      : '<button class="jr-btn" data-act="re-extract">重新抽取</button>' +
+        '<button class="jr-btn" data-act="diag">复制诊断</button>';
+
     root.innerHTML =
       '<div class="jr-panel">' +
       '<div class="jr-head">' +
@@ -1657,6 +1796,7 @@
       '</h4><div class="jr-fields">' + body + '</div></div>' +
       foot +
       '</div>' +
+      '<div class="jr-foot">' + acts + '</div>' +
       '</div>';
   }
 
@@ -1801,6 +1941,8 @@
         handlers.onCopy(lastData, btn);
       } else if (act === 're-extract' && handlers.onReextract) {
         handlers.onReextract();
+      } else if (act === 'diag' && handlers.onDiag) {
+        handlers.onDiag(btn);
       }
     });
   }

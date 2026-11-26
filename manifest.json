@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "岗位雷达 · JD 结构化记录仪",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "在招聘网站岗位详情页把 JD 结构化留存，按强/弱信号词打分，识别疑似伪岗、外包岗与僵尸岗。个人求职辅助工具，不做批量采集。",
   "permissions": ["storage", "unlimitedStorage"],
   "host_permissions": [
@@ -26,6 +26,7 @@
         "src/common/rules.js",
         "src/content/adapters.js",
         "src/content/extract.js",
+        "src/content/diagnose.js",
         "src/content/panel.js",
         "src/content/main.js"
       ],

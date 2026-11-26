@@ -113,6 +113,7 @@ function boot(html, url) {
     'src/common/rules.js',
     'src/content/adapters.js',
     'src/content/extract.js',
+    'src/content/diagnose.js',
     'src/content/panel.js'
   ].forEach(function (rel) {
     w.eval(fs.readFileSync(path.join(__dirname, '..', rel), 'utf8'));
