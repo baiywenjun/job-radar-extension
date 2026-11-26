@@ -100,6 +100,7 @@
   var handlers = {};
   var bound = false;
   var busyText = '';
+  var noticeKey = '';   // 提示内容指纹：内容未变则不重绘，避免 DOM 监听抖动导致闪烁
 
   function mount() {
     if (host && document.documentElement.contains(host)) return;
@@ -128,6 +129,7 @@
     handlers = h || handlers;
     lastData = data;
     busyText = '';
+    noticeKey = '';
     host.style.display = 'block';
     render();
   }
@@ -141,30 +143,44 @@
     render();
   }
 
-  /* 已识别站点但抽不到字段时的诊断态。
-     存在意义：让用户能区分「插件没生效」与「站点改版导致选择器失效」，
-     否则面板完全不出，无从判断。 */
-  function notice(title, lines) {
+  /* 非岗位面板的两种状态：
+     - tone = 'bad'：已展开详情但字段全部抽不到，多半是站点改版，需要诊断信息；
+     - tone = 'info'：列表页 / 未选中岗位，属正常状态，只做轻提示，不摆出报错语气。
+     内容未变时直接返回：列表页的 DOM 抖动很频繁，反复重绘会闪烁且清掉用户的折叠状态。 */
+  function notice(title, lines, opts) {
     mount();
+    opts = opts || {};
+    var tone = opts.tone === 'info' ? 'info' : 'bad';
+    var key = tone + '|' + title + '|' + (lines || []).join('|') + '|' + (opts.foot || '');
+    if (key === noticeKey && lastData === null && host.style.display === 'block') return;
+    noticeKey = key;
+
     host.style.display = 'block';
     lastData = null;
     busyText = '';
     var body = (lines || []).map(function (l) {
       return '<div class="jr-f"><span class="v">' + esc(l) + '</span></div>';
     }).join('');
+    var head = tone === 'bad'
+      ? '<div class="jr-note bad"><b>' + esc(title) + '</b></div>'
+      : '<div class="jr-note"><b>' + esc(title) + '</b></div>';
+    var foot = opts.foot
+      ? '<div class="jr-note">' + esc(opts.foot) + '</div>'
+      : '';
+
     root.innerHTML =
       '<div class="jr-panel">' +
       '<div class="jr-head">' +
       '<div class="jr-brand"><span class="jr-dot"></span>岗位雷达</div>' +
       '<div class="jr-spacer"></div>' +
+      '<button class="jr-icon" data-act="re-extract" title="重新抽取">↻</button>' +
       '<button class="jr-icon" data-act="dismiss" title="关闭">×</button>' +
       '</div>' +
       '<div class="jr-body">' +
-      '<div class="jr-note bad"><b>' + esc(title) + '</b></div>' +
-      '<div class="jr-sec"><h4>诊断信息</h4><div class="jr-fields">' + body + '</div></div>' +
-      '<div class="jr-note">这段提示只在「已识别站点、页面也像岗位详情、但字段全部抽不到」时出现，' +
-      '通常意味着该站改版后类名变了。按 README 的校准章节更新 ' +
-      '<b>src/content/adapters.js</b> 里对应站点的选择器即可。</div>' +
+      head +
+      '<div class="jr-sec"><h4>' + (tone === 'bad' ? '诊断信息' : '当前状态') +
+      '</h4><div class="jr-fields">' + body + '</div></div>' +
+      foot +
       '</div>' +
       '</div>';
   }

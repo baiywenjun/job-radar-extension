@@ -22,7 +22,9 @@
   var RETRY_MAX = 6;
   var emptyStreak = 0;      // 连续抽不到有效岗位的次数
   var MAX_EMPTY = 4;        // 超过才允许隐藏面板
+  var noPaneStreak = 0;     // 连续判定「本页无岗位详情」的次数
   var hasRendered = false;  // 是否曾成功渲染过岗位面板
+  var lastIssueKey = '';    // 问题日志去重：同一类问题只写一次
   var runTimer = null;
   var observer = null;
 
@@ -39,8 +41,15 @@
     return;
   }
 
-  /* 页面上的 JD 关键词，用于判断「这页是否像岗位详情」而不只依赖 URL 形态 */
-  var JD_HINT = /岗位职责|职位描述|工作职责|任职要求|岗位要求|职位要求|工作内容|你将负责/;
+  /* 日志分级很关键：内容脚本的 console.warn 会被 Chrome 计入扩展的「错误」面板，
+     在搜索列表页这种正常场景下写 warn，用户会以为插件崩了。
+     非致命状态一律用 info，只有真正的抽取失败才 warn，且同一 URL 只写一次。 */
+  function logOnce(kind, level, msg) {
+    if (lastIssueKey === kind) return;
+    lastIssueKey = kind;
+    if (level === 'warn') console.warn(TAG + ' ' + msg);
+    else console.info(TAG + ' ' + msg);
+  }
 
   /* 指纹带上 JD 前 120 字与 URL：切换左侧岗位时职位名 / 薪资可能相近，
      只靠长度无法区分，指纹必须随内容本身变化。 */
@@ -161,17 +170,6 @@
     });
   }
 
-  function pageHasJobHint() {
-    try {
-      var b = document.body;
-      // innerText 更贴近可见文本；部分环境（如 jsdom）只有 textContent
-      var txt = (b && (b.innerText || b.textContent)) || '';
-      return JD_HINT.test(txt.slice(0, 6000));
-    } catch (e) {
-      return false;
-    }
-  }
-
   /* 统一调度：URL / 标题变化、DOM 变化、重试全部共用一个防抖定时器，
      避免多个 setTimeout 叠加导致重复渲染，或互相 clearTimeout 顶掉。 */
   function scheduleRun(delay) {
@@ -182,21 +180,26 @@
     }, typeof delay === 'number' ? delay : 500);
   }
 
-  function shouldRetry(f, looksLikeJob) {
+  /* f 为 null 时只在标准详情 URL 下重试：BOSS 的侧滑详情 URL 不变，
+     此时「抽不到」多半是还没选中岗位，盲目重试 6 轮只会在列表页空转。
+     JD 已抓到时标题缺失只给两次机会：标题可能晚于正文渲染，但不会一直不来。 */
+  function shouldRetry(f, isDetail) {
     if (retry >= RETRY_MAX) return false;
-    if (!f) return looksLikeJob;
-    return f.jdText.length < 120 || !f.jobTitle;
+    if (!f) return isDetail;
+    if (f.jdText.length < 120) return true;
+    if (!f.jobTitle) return retry < 2;
+    return false;
   }
 
   function run(force) {
     if (!adapter) return;
     var f = E.extract(adapter);
     var isDetail = A.isDetailPage(adapter, location.href);
-    var looksLikeJob = pageHasJobHint() || isDetail;
     var minJd = isDetail ? 120 : 250;
+    var ok = !!f && !!f.jobTitle && f.jdText.length >= minJd;
 
     /* SPA 详情面板常延迟渲染：抽不到时先重试，不要立刻判死 */
-    if (shouldRetry(f, looksLikeJob)) {
+    if (!ok && shouldRetry(f, isDetail)) {
       retry++;
       if (hasRendered) P.setBusy('正在读取岗位…');
       scheduleRun(700);
@@ -204,35 +207,65 @@
     }
     retry = 0;
 
-    /* 关键分支：BOSS 搜索页切换左侧岗位时，右侧详情是异步替换的，
-       存在「旧详情已清空、新详情还没到」的空窗，此时抽不到是暂时的。
-       旧逻辑在这里直接 P.hide()，而 hide 之后既没有清空指纹、也没有任何
-       触发源会再跑 run —— 面板于是永久消失。
-       现在改为：只要曾成功渲染过，就保留面板并显示等待态，等 DOM 稳定后
-       由监听或下一次调度自动更新；只有连续多次抽不到才允许隐藏。 */
-    if (!f || !f.jobTitle || f.jdText.length < minJd) {
+    if (!ok) {
+      /* 关键分支：必须区分「本页没有岗位详情」与「详情在但抽不到」。
+         BOSS 搜索页 URL 一直是 /web/geek/jobs?query=...，position 为空时
+         只是列表页；列表卡片本身就有 .job-title .name 和 .salary，
+         因此不能靠这些选择器判断「是否打开了详情」，只能认 JD 级证据。 */
+      var hasPane = isDetail || E.hasDetailPane(adapter);
+
+      if (!hasPane) {
+        noPaneStreak++;
+        emptyStreak = 0;
+        // 给一次缓冲：详情可能还在渲染，避免真实详情页首屏闪一下提示
+        if (noPaneStreak < 2) {
+          scheduleRun(600);
+          return;
+        }
+        lastFingerprint = '';
+        P.notice('等待选择岗位', [
+          '已识别站点：' + adapter.name,
+          '当前页面没有展开的岗位详情（搜索结果列表页，或尚未选中岗位）。',
+          '在列表中点选一个岗位后，会自动抽取并评分。'
+        ], {
+          tone: 'info',
+          foot: '这是正常状态，不是插件故障。'
+        });
+        logOnce('no-pane:' + location.pathname, 'info',
+          '本页暂无岗位详情（列表页或未选中岗位），已显示等待提示');
+        return;
+      }
+      noPaneStreak = 0;
+
+      /* 详情已展开但抽不到：可能是「旧详情已清空、新详情未到」的空窗。
+         只要曾成功渲染过，就保留面板并显示等待态，由 DOM 监听自动恢复；
+         旧逻辑在这里直接 P.hide()，hide 后既没清指纹也没有触发源会再跑 run，
+         面板于是永久消失。 */
       emptyStreak++;
       if (hasRendered && emptyStreak < MAX_EMPTY) {
         P.setBusy('正在读取新岗位…');
         scheduleRun(700);
         return;
       }
+
       lastFingerprint = '';
-      if (looksLikeJob) {
-        P.notice('未能识别本页岗位', [
-          '已识别站点：' + adapter.name,
-          '页面像岗位详情，但职位名、公司、JD 均抽取失败。',
-          '多半是该站改版后类名变化，需更新 src/content/adapters.js 中的选择器。',
-          '当前 URL：' + location.href
-        ]);
-        console.warn(TAG + ' 抽取失败：' + adapter.name + ' / ' + location.href);
-      } else {
-        P.hide();
-      }
+      P.notice('未能识别本页岗位', [
+        '已识别站点：' + adapter.name,
+        '页面已展开岗位详情，但职位名、公司、JD 均抽取失败。',
+        '多半是该站改版后类名变化，需更新 src/content/adapters.js 中的选择器。',
+        '当前 URL：' + location.href
+      ], {
+        tone: 'bad',
+        foot: '按 README 的校准章节，用 F12 取真实 class 后加到对应站点的选择器数组最前面。'
+      });
+      logOnce('extract-fail:' + location.href, 'warn',
+        '抽取失败（详情已展开但字段为空）：' + adapter.name + ' / ' + location.href);
       return;
     }
 
     emptyStreak = 0;
+    noPaneStreak = 0;
+    lastIssueKey = '';
     var fp = fingerprint(f);
     if (!force && fp === lastFingerprint) {
       P.setBusy('');

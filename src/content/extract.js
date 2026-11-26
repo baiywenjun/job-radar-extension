@@ -204,6 +204,10 @@
     while ((node = walker.nextNode()) && guard++ < 20000) {
       var t = node.nodeValue || '';
       if (!JD_KEY.test(t)) continue;
+      /* 跳过左侧列表卡片里的摘要（形如「职位描述：负责私有化部署」）：
+         它同样含有关键词，会让锚点落到列表容器上，详情判定与字段抽取
+         会一起错位。详情正文一定不在重复卡片内。 */
+      if (looksLikeListItem(node.parentElement)) continue;
       var cur = node.parentElement;
       for (var i = 0; i < 8 && cur; i++) {
         var len = (cur.textContent || '').length;
@@ -213,6 +217,21 @@
       return node.parentElement;
     }
     return null;
+  }
+
+  /* 判断当前页面是否真的展开了岗位详情。
+     用途：必须把「列表页 / 没选中岗位」与「详情已打开但抽不到」分开——
+     前者是正常状态，后者才是选择器失效。两者都提示诊断会让用户在搜索页
+     看到红色报错卡片，误判插件坏了。
+     只认 JD 级证据：职位名、薪资这类选择器在左侧列表卡片上同样能命中，
+     不能作为判据（列表页一定有 .salary 和 .job-title .name）。 */
+  function hasDetailPane(adapter) {
+    if (!adapter) return false;
+    var jdRes = pickText(adapter.selectors.jd);
+    if (jdRes.sel && U.clean(jdRes.text).length >= 200) return true;
+    var anchor = findJdAnchor();
+    if (anchor && nodeText(anchor).length >= 200) return true;
+    return false;
   }
 
   function heuristicJD() {
@@ -230,6 +249,7 @@
     for (var i = 0; i < limit; i++) {
       var el = nodes[i];
       if (!el || el.children.length > 30) continue;
+      if (looksLikeListItem(el)) continue;
       var raw = el.textContent || '';
       // 门槛定在 100 字：含「岗位职责/任职要求」这类关键词本身已是强信号，
       // 门槛过高会让篇幅较短的真实 JD 抽不到。
@@ -379,7 +399,11 @@
     var scopeTag = scope ? '选择器·区' : '选择器';
 
     /* ---- 第二步：逐字段抽取，优先限定在详情区内 ---- */
-    var t = scope ? pickIn(scope, sel.jobTitle) : pickText(sel.jobTitle);
+    /* 收窄失败时退回全页，但依然走 pickIn —— 它会跳过重复卡片。
+       旧实现退回 pickText（纯 querySelector），在「有详情但收窄失败」时
+       会直接抓到左侧列表卡片的标题，把抽取失败伪装成成功。 */
+    var pageRoot = scope || document.body || document.documentElement;
+    var t = pickIn(pageRoot, sel.jobTitle);
     var jobTitle = validJobTitle(t.text) ? sanitizeJobTitle(t.text) : '';
     var jobTitleSource = (t.sel && jobTitle) ? scopeTag : '';
     if (!jobTitle && scope) {
@@ -392,7 +416,7 @@
     }
     if (!jobTitleSource) jobTitleSource = '未取到';
 
-    var c = scope ? pickIn(scope, sel.company) : pickText(sel.company);
+    var c = pickIn(pageRoot, sel.company);
     var company = sanitizeCompany(c.text);
     var companySource = c.sel ? scopeTag : '';
     if (!company && scope) {
@@ -405,7 +429,7 @@
     }
     if (!companySource) companySource = '未取到';
 
-    var sal = scope ? pickIn(scope, sel.salary) : pickText(sel.salary);
+    var sal = pickIn(pageRoot, sel.salary);
     var salaryText = SalClean(sal.text);
     var salarySource = sal.sel ? scopeTag : '';
     if (!salaryText && scope) {
@@ -421,7 +445,7 @@
     }
     if (!salarySource) salarySource = '未取到';
 
-    var meta = scope ? pickIn(scope, sel.meta) : pickText(sel.meta);
+    var meta = pickIn(pageRoot, sel.meta);
     // meta 选择器若误命中 JD 正文，整段文本都会变成噪声，直接弃用
     var metaText = (meta.el && jdEl && jdEl.contains && jdEl.contains(meta.el))
       ? '' : (meta.text || '');
@@ -467,7 +491,7 @@
       if (eduEl) eduMatch = eduEl.text.match(EDU_RE);
     }
 
-    var act = scope ? pickIn(scope, sel.active) : pickText(sel.active);
+    var act = pickIn(pageRoot, sel.active);
     var activeText = U.ellipsis(act.text, 40);
 
     var jdText = U.clean(jdRes.text).slice(0, 20000);
@@ -508,6 +532,7 @@
 
   global.JR_EXTRACT = {
     extract: extract,
+    hasDetailPane: hasDetailPane,
     parseDocTitle: parseDocTitle,
     findCity: findCity,
     CITIES: CITIES
