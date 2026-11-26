@@ -273,7 +273,8 @@
       fieldRow('公司', f.company, src.company) +
       fieldRow('薪资', f.salaryText, src.salary) +
       fieldRow('城市', f.city, src.city) +
-      fieldRow('经验', f.experienceText, f.experienceText ? '页面' : '未取到') +
+      fieldRow('经验', f.experienceText,
+        f.experienceText ? (src.experience && src.experience !== '未取到' ? src.experience : '页面') : '未取到') +
       fieldRow('活跃', f.activeText, f.activeText ? '页面' : '未取到') +
       '</div>' +
       notes +

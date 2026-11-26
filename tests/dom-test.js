@@ -240,6 +240,72 @@ check('列表防线：薪资不取列表项', fFlat && /30-50K/.test(fFlat.salar
 check('列表防线：经验取详情块', fFlat && /4-6年/.test(fFlat.experienceText),
   fFlat && ('实际 ' + fFlat.experienceText));
 
+/* ---------- 用例 4.7：JD 正文里的数字噪声不得覆盖头部字段 ----------
+   现场（BOSS 新版搜索页）：面板把薪资抽成「3-5K」、经验抽成「在校」、
+   职位抽成招聘者「李润葳 刚刚活跃」，而头部真实值是 8-13K / 1-3年。
+   根因是详情区判定只看整段 textContent，JD 里的「3-5年 / 8K-15K」
+   让 scope 停在 JD 容器内部，头部字段反被排除；宽泛的 .name 选择器
+   又命中了招聘者信息。 */
+const bossHeaderNoiseHtml = `
+<div class="page">
+  <div class="job-list">
+    <div class="job-card">
+      <div class="job-title"><span class="name">FDE（前线部署工程师）</span></div>
+      <div class="salary">6-7K</div>
+      <div class="company-name">某知名基金公司</div>
+    </div>
+    <div class="job-card selected">
+      <div class="job-title"><span class="name">飞书 FDE交付工程师</span></div>
+      <div class="salary">8-13K</div>
+      <div class="company-name">秉希网络</div>
+    </div>
+    <div class="job-card">
+      <div class="job-title"><span class="name">数智工程师（JAVA/FDE）</span></div>
+      <div class="salary">11-17K</div>
+      <div class="company-name">拓臣企业</div>
+    </div>
+  </div>
+  <div class="job-detail-box">
+    <div class="detail-header">
+      <h1>飞书 FDE交付工程师</h1>
+      <span class="pay-text">8-13K</span>
+      <div class="info-primary"><span>广州</span><span>1-3年</span><span>大专</span></div>
+      <div class="boss-info"><span class="name">李润葳 刚刚活跃</span></div>
+      <span>电子商务</span>
+      <div class="comp-name">秉希网络</div>
+    </div>
+    <div class="job-detail-section">
+      <div class="job-sec-text">
+        <h3>职位描述</h3>
+        <p>工作地点：【广州，需接受客户现场出差】</p>
+        <p>薪资范围：【8K-15K】 岗位类型：全职</p>
+        <p>补充说明：实习期补贴 3-5K，在校 / 应届均可，转正后按岗位定级。</p>
+        <p>一、岗位定位：聚焦飞书全系产品（IM、多维表格、妙搭、AIAgent、Aily、开放平台等）在客户侧的落地，深入打通售前交付使用一站式全链路，以技术手段为客户搭建数字化协同、业务流程与智能决策能力。</p>
+        <p>二、岗位职责：配合销售完成中大型企业客户的 POC 验证、系统集成、效果调优到上线护航的全流程交付；独立输出可落地的实施方案，组织方案宣讲、需求梳理、竞品对比、价值呈现。</p>
+        <p>三、任职要求：具备 1-3 年相关经验，大专及以上学历，能接受客户现场出差，有私有化部署与 RAG 知识库建设经验者优先。</p>
+      </div>
+    </div>
+  </div>
+</div>
+`;
+
+setup(bossHeaderNoiseHtml, 'https://www.zhipin.com/web/geek/job?query=FDE',
+  'FDE招聘 - 2026年人才招聘信息 - BOSS直聘');
+const fNoise = E.extract(A.SITE_ADAPTERS[0]);
+
+check('JD 噪声：职位取头部标题，不取招聘者', fNoise && fNoise.jobTitle === '飞书 FDE交付工程师',
+  fNoise && ('实际 ' + fNoise.jobTitle));
+check('JD 噪声：薪资取 8-13K，不取 3-5K / 8K-15K', fNoise && fNoise.salaryText === '8-13K',
+  fNoise && ('实际 ' + fNoise.salaryText));
+check('JD 噪声：经验取 1-3年，不取 在校', fNoise && fNoise.experienceText === '1-3年',
+  fNoise && ('实际 ' + fNoise.experienceText));
+check('JD 噪声：经验来源可诊断', fNoise && fNoise.sources.experience === '结构推断',
+  fNoise && ('实际 ' + fNoise.sources.experience));
+check('JD 噪声：公司不取行业词「电子商务」', fNoise && fNoise.company === '秉希网络',
+  fNoise && ('实际 ' + fNoise.company));
+check('JD 噪声：JD 正文完整抽取', fNoise && fNoise.jdText.length > 250,
+  fNoise && ('实际 ' + fNoise.jdText.length + ' 字'));
+
 /* ---------- 用例 5：详情页判定 ---------- */
 check('详情页判定：BOSS 详情页', A.isDetailPage(A.SITE_ADAPTERS[0], 'https://www.zhipin.com/job_detail/abc.html') === true);
 check('详情页判定：BOSS 列表页', A.isDetailPage(A.SITE_ADAPTERS[0], 'https://www.zhipin.com/web/geek/jobs?query=ai') === false);

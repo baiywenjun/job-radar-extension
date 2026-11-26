@@ -949,6 +949,9 @@
 
   var SALARY_RE = /\d+(?:\.\d+)?\s*[-~至]\s*\d+(?:\.\d+)?\s*(?:[Kk]|千|万)(?:\s*[·・]\s*\d+\s*薪)?/;
   var EXP_RE = /(\d+)\s*[-~至]\s*(\d+)\s*年|(\d+)\s*年以上|应届|经验不限|在校/;
+  /* 结构推断只认明确年限：JD 正文里常出现「在校」「应届」「经验不限」等描述，
+     若用 EXP_RE 去整篇找第一个匹配，会把真实年限覆盖掉。 */
+  var EXP_STRICT_RE = /(\d+)\s*[-~至]\s*(\d+)\s*年|(\d+)\s*年以上/;
   var EDU_RE = /(本科|硕士|博士|大专|中专|学历不限|高中)/;
 
   /* 由城市表构建，供详情区内定位城市文本使用 */
@@ -1176,10 +1179,11 @@
     return { el: null, text: '' };
   }
 
-  /* 以 JD 容器为锚点向上爬，找到同时含薪资与经验的最小祖先，作为「详情区」。
-     这样不必依赖具体类名：站点改版后类名换了，结构关系通常还在。
-     上限 12000 字是为了防止一路爬到整页（那样会把左侧列表也圈进来）。 */
-  function findDetailScope(anchorEl) {
+  /* 以 JD 容器为锚点向上爬，找「JD 正文之外仍同时含薪资与经验」的最小祖先。
+     必须排除 JD 子树后再判定：旧实现直接对整段 textContent 跑正则，
+     JD 里的「3-5年 / 8K-15K」会让 scope 停在 JD 容器内部，
+     头部真实的 8-13K / 1-3年 反而被排除在详情区之外。 */
+  function findDetailScope(anchorEl, jdEl) {
     if (!anchorEl) return null;
     var el = anchorEl;
     for (var i = 0; i < 12; i++) {
@@ -1191,15 +1195,31 @@
       } catch (e) {
         break;
       }
-      if (!t) continue;
-      if (t.length > 12000) break;
-      if (SALARY_RE.test(t) && EXP_RE.test(t)) return el;
+      if (!t || t.length > 12000) break;
+      if (findLeafText(el, SALARY_RE, 24, jdEl) &&
+          findLeafText(el, EXP_STRICT_RE, 16, jdEl)) return el;
+    }
+    // 退化：部分站点把年限写进 JD 正文，此时只要求「JD 之外有薪资」
+    el = anchorEl;
+    for (var j = 0; j < 12; j++) {
+      if (!el.parentElement) break;
+      el = el.parentElement;
+      var t2 = '';
+      try {
+        t2 = el.textContent || '';
+      } catch (e) {
+        break;
+      }
+      if (!t2 || t2.length > 12000) break;
+      if (findLeafText(el, SALARY_RE, 24, jdEl)) return el;
     }
     return null;
   }
 
-  /* 在根节点内找第一个「文本匹配正则」的叶子节点 */
-  function findLeafText(root, re, maxLen) {
+  /* 在根节点内找第一个「文本匹配正则」的叶子节点。
+     excludeEl 用于排除 JD 正文子树：那里常有「3-5K 实习补贴」「在校生亦可」
+     「8K-15K」这类描述性数字，结构推断一旦命中就会盖掉头部真实字段。 */
+  function findLeafText(root, re, maxLen, excludeEl) {
     if (!root) return null;
     var nodes = root.querySelectorAll('*');
     var limit = Math.min(nodes.length, 3000);
@@ -1207,6 +1227,7 @@
       var el = nodes[i];
       if (el.children.length > 1) continue;
       if (looksLikeListItem(el)) continue;
+      if (excludeEl && excludeEl.contains && excludeEl.contains(el)) continue;
       var t = U.clean(el.textContent);
       if (!t || t.length > maxLen) continue;
       var m = t.match(re);
@@ -1215,33 +1236,52 @@
     return null;
   }
 
-  /* 详情区内的标题兜底：取第一个不像薪资/经验的标题元素 */
-  function guessTitleIn(scope) {
+  /* 招聘者信息常被宽泛的 `.name` 选择器命中（实测抽成「李润葳 刚刚活跃」），
+     这里做一次合理性校验，不通过就交给标题推断。 */
+  var TITLE_NOISE = /刚刚活跃|今日活跃|在线|回复率|招聘者|HR|猎头|职位详情|立即沟通|收藏|BOSS直聘/;
+
+  function validJobTitle(t) {
+    if (!t || t.length < 2 || t.length > 40) return false;
+    if (TITLE_NOISE.test(t)) return false;
+    if (SALARY_RE.test(t) || EXP_RE.test(t)) return false;
+    return true;
+  }
+
+  /* 详情区内的标题兜底：优先取 JD 正文之外的 h1/h2/h3 */
+  function guessTitleIn(scope, jdEl) {
     if (!scope) return '';
     var heads = scope.querySelectorAll('h1, h2, h3');
     for (var i = 0; i < heads.length; i++) {
-      var t = U.clean(heads[i].textContent);
-      if (!t || t.length < 2 || t.length > 60) continue;
-      if (SALARY_RE.test(t) || EXP_RE.test(t)) continue;
-      if (/岗位职责|职位描述|任职要求|公司介绍/.test(t)) continue;
+      var el = heads[i];
+      if (jdEl && jdEl.contains && jdEl.contains(el)) continue;
+      if (looksLikeListItem(el)) continue;
+      var t = U.clean(el.textContent);
+      if (!validJobTitle(t)) continue;
+      if (/岗位职责|职位描述|任职要求|岗位要求|公司介绍/.test(t)) continue;
       return sanitizeJobTitle(t);
     }
     return '';
   }
 
+  /* 「电子商务」是行业词不是公司名，旧正则里的裸 `电子` 会误命中它。
+     行业词单独建黑名单；公司后缀要求更具体。 */
+  var INDUSTRY_NOISE = /^(电子商务|互联网|计算机软件|计算机服务|IT服务|人工智能|新能源|咨询服务|贸易|进出口|批发|零售|金融|教育|医疗|游戏|广告|传媒|物流|房地产|信息服务|电子技术)$/;
+  var COMPANY_SUFFIX = /有限公司|股份|集团|研究院|事务所|工作室|医院|学校|大学|银行|证券|保险|科技|网络|技术|数字|数据|智能|电子/;
+
   /* 详情区内的公司名兜底：靠工商后缀识别，比类名稳 */
-  function guessCompanyIn(scope) {
+  function guessCompanyIn(scope, jdEl) {
     if (!scope) return '';
     var nodes = scope.querySelectorAll('a, span, h3, h4, div');
     var limit = Math.min(nodes.length, 2500);
     for (var i = 0; i < limit; i++) {
       var el = nodes[i];
       if (el.children.length > 1) continue;
+      if (jdEl && jdEl.contains && jdEl.contains(el)) continue;
+      if (looksLikeListItem(el)) continue;
       var t = U.clean(el.textContent);
       if (!t || t.length < 4 || t.length > 30) continue;
-      if (/有限公司|股份|集团|研究院|事务所|工作室|医院|学校|大学|银行|证券|保险|电子/.test(t)) {
-        return sanitizeCompany(t);
-      }
+      if (INDUSTRY_NOISE.test(t)) continue;
+      if (COMPANY_SUFFIX.test(t)) return sanitizeCompany(t);
     }
     return '';
   }
@@ -1266,15 +1306,16 @@
         jdSource = '启发式';
       }
     }
-    var scope = findDetailScope(jdRes.el);
+    var jdEl = jdRes.el;
+    var scope = findDetailScope(jdRes.el, jdEl);
     var scopeTag = scope ? '选择器·区' : '选择器';
 
     /* ---- 第二步：逐字段抽取，优先限定在详情区内 ---- */
     var t = scope ? pickIn(scope, sel.jobTitle) : pickText(sel.jobTitle);
-    var jobTitle = sanitizeJobTitle(t.text);
-    var jobTitleSource = t.sel ? scopeTag : '';
+    var jobTitle = validJobTitle(t.text) ? sanitizeJobTitle(t.text) : '';
+    var jobTitleSource = (t.sel && jobTitle) ? scopeTag : '';
     if (!jobTitle && scope) {
-      jobTitle = guessTitleIn(scope);
+      jobTitle = guessTitleIn(scope, jdEl);
       if (jobTitle) jobTitleSource = '结构推断';
     }
     if (!jobTitle) {
@@ -1287,7 +1328,7 @@
     var company = sanitizeCompany(c.text);
     var companySource = c.sel ? scopeTag : '';
     if (!company && scope) {
-      company = guessCompanyIn(scope);
+      company = guessCompanyIn(scope, jdEl);
       if (company) companySource = '结构推断';
     }
     if (!company) {
@@ -1300,7 +1341,7 @@
     var salaryText = SalClean(sal.text);
     var salarySource = sal.sel ? scopeTag : '';
     if (!salaryText && scope) {
-      var salEl = findLeafText(scope, SALARY_RE, 24);
+      var salEl = findLeafText(scope, SALARY_RE, 24, jdEl);
       if (salEl) {
         salaryText = salEl.text;
         salarySource = '结构推断';
@@ -1313,12 +1354,14 @@
     if (!salarySource) salarySource = '未取到';
 
     var meta = scope ? pickIn(scope, sel.meta) : pickText(sel.meta);
-    var metaText = meta.text || '';
+    // meta 选择器若误命中 JD 正文，整段文本都会变成噪声，直接弃用
+    var metaText = (meta.el && jdEl && jdEl.contains && jdEl.contains(meta.el))
+      ? '' : (meta.text || '');
 
     var city = findCity(metaText);
     var citySource = city ? scopeTag : '';
     if (!city && scope) {
-      var cityEl = findLeafText(scope, CITY_RE, 30);
+      var cityEl = findLeafText(scope, CITY_RE, 30, jdEl);
       if (cityEl) {
         city = findCity(cityEl.text);
         if (city) citySource = '结构推断';
@@ -1330,18 +1373,29 @@
     }
     if (!citySource) citySource = '未取到';
 
+    var experienceSource = '';
     var experienceText = '';
-    var expMatch = metaText.match(EXP_RE);
-    if (expMatch) experienceText = expMatch[0];
-    if (!experienceText && scope) {
-      var expEl = findLeafText(scope, EXP_RE, 16);
-      if (expEl) experienceText = expEl.text;
+    // meta 行里可能同时有「1-3年」和「经验不限 / 在校」，优先取明确年限
+    var expMatch = metaText.match(EXP_STRICT_RE) || metaText.match(EXP_RE);
+    if (expMatch) {
+      experienceText = expMatch[0];
+      experienceSource = scopeTag || '页面';
     }
-    if (!experienceText && parsed.experience) experienceText = parsed.experience;
+    if (!experienceText && scope) {
+      var expEl = findLeafText(scope, EXP_STRICT_RE, 16, jdEl);
+      if (expEl) {
+        experienceText = expEl.text;
+        experienceSource = '结构推断';
+      }
+    }
+    if (!experienceText && parsed.experience) {
+      experienceText = parsed.experience;
+      experienceSource = '标题推断';
+    }
 
     var eduMatch = metaText.match(EDU_RE);
     if (!eduMatch && scope) {
-      var eduEl = findLeafText(scope, EDU_RE, 8);
+      var eduEl = findLeafText(scope, EDU_RE, 8, jdEl);
       if (eduEl) eduMatch = eduEl.text.match(EDU_RE);
     }
 
@@ -1371,6 +1425,7 @@
         company: companySource,
         salary: salarySource,
         city: citySource,
+        experience: experienceSource || '未取到',
         jd: jdSource
       },
       extractedAt: Date.now()
@@ -1668,7 +1723,8 @@
       fieldRow('公司', f.company, src.company) +
       fieldRow('薪资', f.salaryText, src.salary) +
       fieldRow('城市', f.city, src.city) +
-      fieldRow('经验', f.experienceText, f.experienceText ? '页面' : '未取到') +
+      fieldRow('经验', f.experienceText,
+        f.experienceText ? (src.experience && src.experience !== '未取到' ? src.experience : '页面') : '未取到') +
       fieldRow('活跃', f.activeText, f.activeText ? '页面' : '未取到') +
       '</div>' +
       notes +
