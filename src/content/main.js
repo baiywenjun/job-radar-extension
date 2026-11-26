@@ -5,6 +5,8 @@
 (function () {
   'use strict';
 
+  var TAG = '[岗位雷达]';
+
   var U = window.JR_UTIL;
   var R = window.JR_RULES;
   var E = window.JR_EXTRACT;
@@ -15,8 +17,24 @@
   var lastFingerprint = '';
   var lastHref = location.href;
   var lastTitle = document.title;
+  var retry = 0;
+  var RETRY_MAX = 8;
 
-  if (!U || !R || !E || !A || !P) return;
+  /* 依赖缺失不能静默 return，否则用户只看到「插件没反应」，无从排查 */
+  var missing = [];
+  if (!U) missing.push('util.js');
+  if (!R) missing.push('rules.js');
+  if (!E) missing.push('extract.js');
+  if (!A) missing.push('adapters.js');
+  if (!P) missing.push('panel.js');
+  if (missing.length) {
+    console.error(TAG + ' 依赖脚本未加载：' + missing.join('、') +
+      '。请到 chrome://extensions 查看该扩展的错误信息并重新加载。');
+    return;
+  }
+
+  /* 页面上的 JD 关键词，用于判断「这页是否像岗位详情」而不只依赖 URL 形态 */
+  var JD_HINT = /岗位职责|职位描述|工作职责|任职要求|岗位要求|职位要求|工作内容|你将负责/;
 
   function fingerprint(f) {
     return [f.jobTitle, f.company, f.salaryText, f.jdText.length].join('|');
@@ -132,17 +150,53 @@
     });
   }
 
+  function pageHasJobHint() {
+    try {
+      return JD_HINT.test(document.body ? document.body.innerText.slice(0, 6000) : '');
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /* 页面看起来是岗位页，但这次没抽到：可能是 SPA 还在渲染，重试几次再下结论 */
+  function shouldRetry(f) {
+    if (retry >= RETRY_MAX) return false;
+    if (!f) return pageHasJobHint() || A.isDetailPage(adapter, location.href);
+    return f.jdText.length < 120 || !f.jobTitle;
+  }
+
   function run(force) {
     if (!adapter) return;
     var f = E.extract(adapter);
+
+    /* SPA 详情面板常延迟渲染：抽不到时先重试，不要立刻判死 */
+    if (shouldRetry(f)) {
+      retry++;
+      setTimeout(function () { run(force); }, 700);
+      return;
+    }
+    retry = 0;
+
     if (!f) {
-      P.hide();
+      if (A.isDetailPage(adapter, location.href) || pageHasJobHint()) {
+        P.notice('未能识别本页岗位', [
+          '已识别站点：' + adapter.name,
+          '页面像岗位详情，但职位名、公司、JD 均抽取失败。',
+          '多半是该站改版后类名变化，需更新 src/content/adapters.js 中的选择器。',
+          '当前 URL：' + location.href
+        ]);
+        console.warn(TAG + ' 抽取失败：' + adapter.name + ' / ' + location.href);
+      } else {
+        P.hide();
+      }
       return;
     }
 
     var isDetail = A.isDetailPage(adapter, location.href);
-    // 列表页/首页要求更高的抽取质量才显示，避免在搜索结果页误注入
-    if (!isDetail && (f.jdText.length < 400 || !f.jobTitle)) {
+    /* 不再强依赖 detailPattern：BOSS 新版是列表页右侧滑出详情，URL 不变成
+       /job_detail/，若只认标准详情路径会导致面板永不出现。
+       改以「是否抽到足够的 JD + 有职位名」为准。 */
+    if (!isDetail && (f.jdText.length < 250 || !f.jobTitle)) {
       P.hide();
       return;
     }
@@ -169,12 +223,16 @@
       staleDays: 0
     };
 
+    console.log(TAG + ' 已渲染 · ' + adapter.name + ' · ' + (f.jobTitle || '未取到职位名') +
+      ' · JD ' + f.jdText.length + ' 字 · ' + ev.score + ' 分（' + ev.gradeLabel + '）');
+
     P.bind();
     P.show(data, {
       onSave: onSave,
       onCopy: onCopy,
       onReextract: function () {
         lastFingerprint = '';
+        retry = 0;
         run(true);
       }
     });
@@ -192,29 +250,38 @@
     });
   }
 
+  /* 只在 URL 或标题变化时重跑；BOSS 等站点在同一 URL 内切换岗位，
+     因此额外比对页面标题。 */
   function tick() {
     if (location.href !== lastHref) {
       lastHref = location.href;
       lastFingerprint = '';
+      retry = 0;
       setTimeout(function () { run(false); }, 900);
       return;
     }
     if (document.title !== lastTitle) {
       lastTitle = document.title;
       lastFingerprint = '';
+      retry = 0;
       setTimeout(function () { run(false); }, 900);
     }
   }
 
   function init() {
     adapter = A.getAdapter(location.hostname);
-    if (!adapter) return;
-    if (A.looksLikeListPage(location.href) && !A.isDetailPage(adapter, location.href)) {
-      // 明确是列表页时先不注入，等用户点进详情
+    if (!adapter) {
+      console.log(TAG + ' 当前域名不在支持列表：' + location.hostname);
       return;
     }
-    setTimeout(function () { run(false); }, 1200);
+
+    console.log(TAG + ' 已注入 · ' + adapter.name + ' · ' + location.href);
+
+    /* 监控必须无条件启动。此前若判定为「列表页」就提前 return，
+       而 BOSS / 脉脉 是 SPA，从列表点进详情不会重新注入内容脚本，
+       导致面板永远不出现。 */
     setInterval(tick, 1300);
+    setTimeout(function () { run(false); }, 1200);
   }
 
   init();

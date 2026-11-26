@@ -125,6 +125,33 @@
     render();
   }
 
+  /* 已识别站点但抽不到字段时的诊断态。
+     存在意义：让用户能区分「插件没生效」与「站点改版导致选择器失效」，
+     否则面板完全不出，无从判断。 */
+  function notice(title, lines) {
+    mount();
+    host.style.display = 'block';
+    lastData = null;
+    var body = (lines || []).map(function (l) {
+      return '<div class="jr-f"><span class="v">' + esc(l) + '</span></div>';
+    }).join('');
+    root.innerHTML =
+      '<div class="jr-panel">' +
+      '<div class="jr-head">' +
+      '<div class="jr-brand"><span class="jr-dot"></span>岗位雷达</div>' +
+      '<div class="jr-spacer"></div>' +
+      '<button class="jr-icon" data-act="dismiss" title="关闭">×</button>' +
+      '</div>' +
+      '<div class="jr-body">' +
+      '<div class="jr-note bad"><b>' + esc(title) + '</b></div>' +
+      '<div class="jr-sec"><h4>诊断信息</h4><div class="jr-fields">' + body + '</div></div>' +
+      '<div class="jr-note">这段提示只在「已识别站点、页面也像岗位详情、但字段全部抽不到」时出现，' +
+      '通常意味着该站改版后类名变了。按 README 的校准章节更新 ' +
+      '<b>src/content/adapters.js</b> 里对应站点的选择器即可。</div>' +
+      '</div>' +
+      '</div>';
+  }
+
   function gradeColor(grade) {
     switch (grade) {
       case 'strong': return '#1c7a4c';
@@ -158,6 +185,7 @@
     var d = lastData;
     var f = d.fields;
     var ev = d.ev;
+    var src = f.sources || {};
     var color = gradeColor(ev.grade);
 
     var tags = [];
@@ -223,10 +251,10 @@
       '</div>' +
       '<div class="jr-tags">' + tags.join('') + '</div>' +
       '<div class="jr-fields">' +
-      fieldRow('职位', f.jobTitle, f.sources.jobTitle) +
-      fieldRow('公司', f.company, f.sources.company) +
-      fieldRow('薪资', f.salaryText, f.sources.salary) +
-      fieldRow('城市', f.city, f.sources.city) +
+      fieldRow('职位', f.jobTitle, src.jobTitle) +
+      fieldRow('公司', f.company, src.company) +
+      fieldRow('薪资', f.salaryText, src.salary) +
+      fieldRow('城市', f.city, src.city) +
       fieldRow('经验', f.experienceText, f.experienceText ? '页面' : '未取到') +
       fieldRow('活跃', f.activeText, f.activeText ? '页面' : '未取到') +
       '</div>' +
@@ -239,7 +267,7 @@
       '<button class="jr-btn ' + (d.saved ? 'done' : 'primary') + '" data-act="save">' + esc(savedLabel) + '</button>' +
       '<button class="jr-btn" data-act="copy">复制摘要</button>' +
       '</div>' +
-      '<div class="jr-mini">JD 来源：' + esc(f.sources.jd) + ' · 共 ' + ev.jdLength + ' 字 · 仅个人使用，不采集他人信息</div>' +
+      '<div class="jr-mini">JD 来源：' + esc(src.jd || '未取到') + ' · 共 ' + ev.jdLength + ' 字 · 仅个人使用，不采集他人信息</div>' +
       '</div>';
   }
 
@@ -255,6 +283,8 @@
       if (act === 'toggle') {
         collapsed = !collapsed;
         render();
+      } else if (act === 'dismiss') {
+        hide();
       } else if (act === 'save' && handlers.onSave) {
         handlers.onSave(lastData);
       } else if (act === 'copy' && handlers.onCopy) {
@@ -275,6 +305,7 @@
 
   global.JR_PANEL = {
     show: show,
+    notice: notice,
     hide: hide,
     markSaved: markSaved,
     bind: bind,

@@ -198,5 +198,20 @@ const text2 = host.shadowRoot.textContent;
 check('面板：保存后切换为更新按钮', text2.indexOf('更新记录') !== -1);
 check('面板：挂牌 46 天给出提示', text2.indexOf('46 天') !== -1);
 
+// 诊断态：已识别站点、页面像详情、但字段全抽不到时，必须给出可见提示。
+// 否则用户无法区分「插件没生效」和「站点改版导致选择器失效」。
+P.notice('未能识别本页岗位', [
+  '已识别站点：BOSS 直聘',
+  '页面像岗位详情，但职位名、公司、JD 均抽取失败。'
+]);
+const text3 = host.shadowRoot.textContent;
+check('诊断态：显示标题', text3.indexOf('未能识别本页岗位') !== -1);
+check('诊断态：显示诊断信息', text3.indexOf('BOSS 直聘') !== -1);
+check('诊断态：面板保持可见', host.style.display !== 'none');
+check('诊断态：不再渲染打分环', !host.shadowRoot.querySelector('.jr-ring'));
+check('诊断态：提供关闭按钮', !!host.shadowRoot.querySelector('[data-act="dismiss"]'));
+fireClick('[data-act="dismiss"]');
+check('诊断态：点击关闭后面板隐藏', host.style.display === 'none');
+
 console.log('\n结果：通过 ' + pass + ' / 失败 ' + fail);
 process.exit(fail ? 1 : 0);
