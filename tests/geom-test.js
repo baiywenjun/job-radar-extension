@@ -138,7 +138,13 @@ check('几何：薪资没被左侧卡片串掉', f && !/15-22K/.test(f.salaryTex
 check('几何：城市', f && f.city === '广州', f && ('实际 ' + f.city));
 check('几何：经验', f && f.experienceText === '5-10年', f && ('实际 ' + f.experienceText));
 check('几何：学历', f && f.educationText === '本科', f && ('实际 ' + f.educationText));
-check('几何：JD 字数足够', f && f.jdText.length >= 250, f && ('实际 ' + (f && f.jdText.length)));
+/* 正文清理会剥掉页头与「职位描述」这类小标题，字数不再是原始值的直接映射，
+   所以这里断言「完整性」而不是某个具体字数：首句、末句都在，说明没被截断。 */
+check('几何：JD 抽全（首尾都在）', f &&
+  f.jdText.length >= 240 &&
+  f.jdText.indexOf('负责持续集成、持续交付') === 0 &&
+  f.jdText.indexOf('持续降低平均恢复时间') !== -1,
+  f && ('实际 ' + f.jdText.length + ' 字'));
 
 /* ---------- 用例 2：没有布局信息（零尺寸），应退回结构推断 ---------- */
 setup(false);

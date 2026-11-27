@@ -14,7 +14,7 @@
         return global.chrome.runtime.getManifest().version;
       }
     } catch (e) { /* 非扩展环境 */ }
-    return '0.2.4';
+    return '0.2.5';
   })();
 
   function brand() {
@@ -78,6 +78,7 @@
 .jr-f .s{flex:0 0 auto;font-size:10px;color:#9aa5b6;border:1px solid var(--soft);
   padding:0 4px;border-radius:3px;white-space:nowrap}
 .jr-f .s.miss{color:var(--bad);border-color:var(--badline);background:var(--badbg)}
+.jr-f .s.warn{color:var(--warn);border-color:var(--warnline);background:var(--warnbg)}
 .jr-f .v.miss{color:#aab3c2}
 
 .jr-sec{margin-bottom:11px}
@@ -250,8 +251,11 @@
 
   function fieldRow(label, value, source, mono) {
     var miss = !value;
+    var cls = source === '未取到' ? ' miss' : (source === '字形混淆' ? ' warn' : '');
     var srcBadge = source
-      ? '<span class="s' + (source === '未取到' ? ' miss' : '') + '">' + esc(source) + '</span>'
+      ? '<span class="s' + cls + '"' +
+        (source === '字形混淆' ? ' title="站点用私有字符替换了数字，未能解码；已置空，不发给模型"' : '') +
+        '>' + esc(source) + '</span>'
       : '';
     return (
       '<div class="jr-f">' +
@@ -515,7 +519,8 @@
       '<button class="jr-btn" data-act="diag">复制诊断</button>' +
       '</div>' +
       '<div class="jr-mini">JD 来源：' + esc(src.jd || '未取到') + ' · 共 ' + ev.jdLength +
-      ' 字 · 判定：' + esc(judgeLabel(d)) + ' · 仅个人使用，不采集他人信息</div>' +
+      ' 字' + (f.dirty && f.dirty.ui ? '（已清理 ' + f.dirty.ui + ' 处页面控件）' : '') +
+      ' · 判定：' + esc(judgeLabel(d)) + ' · 仅个人使用，不采集他人信息</div>' +
       '</div>';
   }
 

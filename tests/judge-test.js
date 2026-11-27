@@ -422,7 +422,9 @@ const V = globalThis.JR_VERDICT;
   check('带上岗位 key', verdict.jobKey === 'k1');
   check('带上标准 id 与版本',
     verdict.profileId === localStore.profiles[0].id && verdict.profileVersion === 1);
-  check('带上提示词版本', verdict.promptVersion === 1, String(verdict.promptVersion));
+  check('带上提示词版本',
+    verdict.promptVersion === globalThis.JR_PROMPT.PROMPT_VERSION,
+    String(verdict.promptVersion));
   check('带上 jdHash', typeof verdict.jdHash === 'string' && verdict.jdHash.length > 0);
   check('标记结论来源为模型', verdict.source === 'model');
   check('带上 usage', verdict.usage.in === 1500 && verdict.usage.out === 200,

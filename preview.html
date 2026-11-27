@@ -951,7 +951,14 @@
     '西宁', '拉萨', '香港', '澳门', '台北'
   ];
 
-  var SALARY_RE = /\d+(?:\.\d+)?\s*[-~至‐‑‒–—−－]\s*\d+(?:\.\d+)?\s*(?:[Kk]|千|万)(?:\s*[·・]\s*\d+\s*薪)?/;
+  /* 数字位：BOSS 会把数字换成私有区字符（U+E031..U+E03A），再用自建字体
+     kanzhun-mix 把字形渲染回数字。DOM 里根本没有 \d，所以检测阶段必须两种都认，
+     否则「薪资抽不到」会连带把详情区判定也带偏（见 findDetailScope）。 */
+  var NUM = '[\\d\\uE031-\\uE03A]';
+  var SALARY_RE = new RegExp(
+    NUM + '+(?:\\.' + NUM + '+)?\\s*[-~至‐‑‒–—−－]\\s*' +
+    NUM + '+(?:\\.' + NUM + '+)?\\s*(?:[Kk]|千|万)(?:\\s*[·・]\\s*\\d+\\s*薪)?'
+  );
   var EXP_RE = /(\d+)\s*[-~至]\s*(\d+)\s*年|(\d+)\s*年以上|应届|经验不限|在校/;
   /* 结构推断只认明确年限：JD 正文里常出现「在校」「应届」「经验不限」等描述，
      若用 EXP_RE 去整篇找第一个匹配，会把真实年限覆盖掉。 */
@@ -1598,6 +1605,202 @@
     return selected.length === 1 ? selected[0] : null;
   }
 
+  /* ---------- 正文清理：把页面控件从 JD 里摘出去 ----------
+     现场问题：详情区容器（或启发式命中的祖先）把页头一起圈了进来，于是
+     「取消收藏」「微信扫一扫」「举报」这类按钮文案混进 <jd>，模型会把它们
+     当成岗位内容引用，甚至写进 risks（实测就出现过「页面混入招聘平台噪声文字」）。
+     处理分三层：结构上跳过可交互子树 → 行级丢弃控件文案 → 兜底删除粘连片段。 */
+
+  var PUA_RE = /[\uE000-\uF8FF\uFFFD]/;
+  var PUA_ALL_RE = /[\uE000-\uF8FF]/g;
+
+  /* 私有区数字 → 阿拉伯数字。映射由站点字体固定（实测 E031..E03A → 0..9）。
+     万一站点换了映射，这里只会得到「未识别」，不会给出一个错数字——错数字比没有更糟。 */
+  function decodeDigits(s) {
+    return String(s == null ? '' : s).replace(/[\uE031-\uE03A]/g, function (c) {
+      return String(c.charCodeAt(0) - 0xE031);
+    });
+  }
+
+  function isZhipin() {
+    try {
+      return /(^|\.)zhipin\.com$/i.test(location.hostname || '');
+    } catch (e) {
+      return false;
+    }
+  }
+
+  var UI_TAGS = {
+    BUTTON: 1, SELECT: 1, TEXTAREA: 1, INPUT: 1, OPTION: 1, OPTGROUP: 1,
+    LABEL: 1, SVG: 1, PATH: 1, IMG: 1, I: 1,
+    SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, IFRAME: 1, CANVAS: 1, VIDEO: 1, AUDIO: 1
+  };
+
+  var UI_CLASS_RE = /(^|[-_\s])(btn|button|toolbar|tool-bar|action|actionbar|action-bar|operate|operations|share|report|collect|favorite|qrcode|qr-code|wxtip|app-tip)([-_\s]|$)/i;
+
+  var BLOCK_TAGS = {
+    DIV: 1, P: 1, LI: 1, UL: 1, OL: 1, SECTION: 1, ARTICLE: 1, HEADER: 1,
+    FOOTER: 1, MAIN: 1, ASIDE: 1, NAV: 1, H1: 1, H2: 1, H3: 1, H4: 1,
+    H5: 1, H6: 1, TR: 1, TD: 1, TH: 1, TABLE: 1, BLOCKQUOTE: 1, PRE: 1,
+    DD: 1, DT: 1, DL: 1, FIGURE: 1, FIGCAPTION: 1, ADDRESS: 1, BR: 1
+  };
+
+  /* 整行只有这些字样，就是控件而不是岗位内容 */
+  var UI_LABEL_RE = /^(取消收藏|已收藏|收藏|关注|已关注|分享|微信分享|QQ分享|微博分享|复制链接|复制|举报|投诉|反馈|立即沟通|继续沟通|马上沟通|沟通|投递简历|立即投递|立即申请|申请职位|不感兴趣|查看更多|查看全部|查看更多信息|展开|收起|展开全部|收起全部|微信扫一扫|微信扫码|扫码查看|扫码沟通|扫一扫|点击查看地图|查看地图|去查看|打开APP|APP内打开|下载APP|登录|注册|返回顶部|上一篇|下一篇|相似职位|公司介绍|工商信息|换一批|点赞|评论|转发|生成海报|海报|纠错|刷新|加载中)$/;
+
+  /* 这些字样不会出现在岗位描述里，整段拼在一起时直接删掉 */
+  var GLUED_UI_RE = /(取消收藏|已收藏|微信扫一扫|微信扫码|扫码查看|复制链接|生成海报|查看更多信息|点击查看地图)/g;
+
+  /* 章节标题要保留：它们对模型理解结构有用，且同属「短行」容易被误删 */
+  var JD_HEAD_RE = /^(岗位职责|职位描述|工作职责|任职要求|岗位要求|职位要求|工作内容|职责描述|岗位描述|你需要做|你将负责|我们希望你|加分项|加分项：|薪资福利)$/;
+
+  function isHiddenEl(el) {
+    if (!el) return false;
+    if (el.hidden) return true;
+    var st = el.getAttribute && el.getAttribute('style');
+    return !!(st && /display\s*:\s*none|visibility\s*:\s*hidden/i.test(st));
+  }
+
+  /* 可交互 / 装饰性节点：正文里几乎没有这类元素，跳过它们不会丢岗位内容。
+     <a> 一律跳过——JD 里极少有链接，有也基本是导航或公司主页。 */
+  function isUiNode(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (isHiddenEl(el)) return true;
+    if (UI_TAGS[el.tagName]) return true;
+    if (el.tagName === 'A') return true;
+    if (el.getAttribute) {
+      if (el.getAttribute('aria-hidden') === 'true') return true;
+      var role = el.getAttribute('role');
+      if (role === 'button' || role === 'tab' || role === 'toolbar') return true;
+      if (el.hasAttribute('onclick')) return true;
+    }
+    var cls = typeof el.className === 'string' ? el.className : '';
+    return !!(cls && UI_CLASS_RE.test(cls));
+  }
+
+  function collectText(node, buf) {
+    var kids = node.childNodes || [];
+    for (var i = 0; i < kids.length; i++) {
+      var n = kids[i];
+      if (n.nodeType === 3) {
+        buf.push(n.nodeValue);
+        continue;
+      }
+      if (n.nodeType !== 1) continue;
+      if (isUiNode(n)) continue;
+      var block = !!BLOCK_TAGS[n.tagName];
+      if (block) buf.push('\n');
+      collectText(n, buf);
+      if (block) buf.push('\n');
+    }
+    return buf;
+  }
+
+  /* 去掉行首的图标 / emoji / 序号符号，便于比对控件文案 */
+  function labelOf(t) {
+    return U.clean(t).replace(/^[^\u4e00-\u9fa5A-Za-z0-9]+/, '').replace(/\s+/g, '');
+  }
+
+  function isUiLine(t, ctx) {
+    var s = labelOf(t);
+    if (!s) return true;
+    if (UI_LABEL_RE.test(s)) return true;
+    if (JD_HEAD_RE.test(s)) return false;
+    /* 6 字以内、没有句读、不以序号或单词开头的短行：基本都是按钮 / 图标注释。
+       正文条目普遍以「1.」「（1）」「-」开头，或带有句读。 */
+    if (s.length <= 6 && !/[。，；：、！？,;:!?]/.test(s) &&
+        !/^\d/.test(s) && !/[A-Za-z]{2,}/.test(s)) return true;
+    if (ctx) {
+      var keys = ['jobTitle', 'company', 'salaryText', 'experienceText', 'city'];
+      for (var i = 0; i < keys.length; i++) {
+        var v = ctx[keys[i]];
+        if (v && labelOf(v) === s) return true;   // 页头的职位名 / 薪资 / 公司名
+      }
+    }
+    return false;
+  }
+
+  /* 沿「单一大块」向下收窄：某子节点占七成以上文本才继续深入。
+     这样能剥掉被一起圈进来的页头，又不会把「岗位职责 / 任职要求」两块拆散。 */
+  function textLen(el) {
+    try {
+      return (el.textContent || '').length;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  function narrowJd(el) {
+    var cur = el;
+    for (var i = 0; i < 6; i++) {
+      if (!cur || !cur.children || !cur.children.length) break;
+      var curLen = textLen(cur);
+      if (curLen < 200) break;
+      var best = null;
+      var bestLen = 0;
+      for (var j = 0; j < cur.children.length; j++) {
+        var kid = cur.children[j];
+        if (isUiNode(kid)) continue;
+        var len = textLen(kid);
+        if (len > bestLen) {
+          bestLen = len;
+          best = kid;
+        }
+      }
+      if (!best || bestLen < curLen * 0.7) break;
+      cur = best;
+    }
+    return cur;
+  }
+
+  /* 结构化取文：跳过可交互子树，再按行过滤控件文案。
+     若结构过滤剥掉了太多（正文被套在 <a>/<label> 这类罕见结构里），
+     退回纯文本过滤，宁可多留一点也不要把 JD 抽残。 */
+  function jdTextOf(el, ctx) {
+    if (!el) return { text: '', dropped: 0, glued: 0 };
+    var structured = collectText(el, []).join('');
+    var plain = nodeText(el);
+    var base = structured;
+    if (!U.clean(structured)) {
+      base = plain;
+    } else if (U.clean(structured).length < U.clean(plain).length * 0.6 &&
+               U.clean(plain).length - U.clean(structured).length > 200) {
+      base = plain;
+    }
+    return cleanJdText(base, ctx);
+  }
+
+  function cleanJdText(raw, ctx) {
+    var s = String(raw == null ? '' : raw);
+    var glued = 0;
+    s = s.replace(GLUED_UI_RE, function () {
+      glued++;
+      return ' ';
+    });
+    if (isZhipin()) s = decodeDigits(s);
+    s = s.replace(PUA_ALL_RE, ' ');   // 解不出的私有区字符：不可见噪声，留着只会污染引用核对
+
+    var lines = s.split('\n');
+    var out = [];
+    var removed = [];
+    var dropped = 0;
+    var last = '';
+    for (var i = 0; i < lines.length; i++) {
+      var t = U.clean(lines[i]);
+      if (!t) continue;
+      var ui = isUiLine(t, ctx);
+      if (ui || t === last) {
+        dropped++;
+        /* 留几行样本给诊断：用户能据此判断「被删掉的到底是不是控件」 */
+        if (ui && removed.length < 6) removed.push(U.ellipsis(t, 40));
+        continue;
+      }
+      out.push(t);
+      last = t;
+    }
+    return { text: out.join('\n'), dropped: dropped + glued, glued: glued, removed: removed };
+  }
+
   function extract(adapter) {
     if (!adapter) return null;
     var sel = adapter.selectors;
@@ -1618,7 +1821,7 @@
         jdSource = '启发式';
       }
     }
-    var jdEl = jdRes.el;
+    var jdEl = narrowJd(jdRes.el);
     /* 详情列优先用几何判定（不依赖类名，抗改版），失败再退回结构推断 */
     var pane = findDetailPane(jdEl);
     var scope = pane || findDetailScope(jdRes.el, jdEl);
@@ -1646,13 +1849,12 @@
     var card = adapter.id === 'zhipin' && /\/web\/geek\/jobs?(\/|$)/.test(location.pathname)
       ? matchingListCard(jobTitle, scope) : null;
 
+    /* 公司名的取值顺序：详情区里的证据优先，列表卡片最后用。
+       旧顺序把「列表匹配」排在最前，结果详情区明明有招聘者所属公司，却先信了
+       左侧卡片——同名岗位一多，就会把别家公司的名字发给模型。 */
     var c = pickIn(pageRoot, sel.company);
     var company = isCompanyText(U.clean(c.text), jobTitle) ? sanitizeCompany(c.text) : '';
     var companySource = (c.sel && company) ? scopeTag : '';
-    if (!company && card) {
-      company = card.company;
-      companySource = '列表匹配';
-    }
     if (!company && adapter.id === 'zhipin') {
       company = bossRecruiterCompany(scope, jobTitle);
       if (company) companySource = '招聘者信息';
@@ -1660,6 +1862,10 @@
     if (!company && scope) {
       company = guessCompanyIn(scope, jdEl, jobTitle);
       if (company) companySource = '结构推断';
+    }
+    if (!company && card && card.company) {
+      company = card.company;
+      companySource = '列表匹配';
     }
     if (!company) {
       company = sanitizeCompany(parsed.company);
@@ -1693,6 +1899,9 @@
       salaryText = parsed.salary;
       salarySource = '标题推断';
     }
+    /* 站点用私有区字符替换了数字、而我们没能解码：绝不能把「-K」这种残缺文本
+       当薪资发出去。只有 BOSS 有这套字形混淆，别站点按普通「未取到」处理。 */
+    if (!salaryText && isZhipin() && PUA_RE.test(sal.text || '')) salarySource = '字形混淆';
     if (!salarySource) salarySource = '未取到';
 
     var meta = pickIn(pageRoot, sel.meta);
@@ -1744,7 +1953,16 @@
     var act = pickIn(pageRoot, sel.active);
     var activeText = U.ellipsis(act.text, 40);
 
-    var jdText = U.clean(jdRes.text).slice(0, 20000);
+    /* 正文必须在这里再过一遍：混进 JD 的按钮文案、页头字段、私有区噪声
+       都会原样发给模型，模型也就会把它们当岗位内容引用。 */
+    var jdClean = jdTextOf(jdEl || jdRes.el, {
+      jobTitle: jobTitle,
+      company: company,
+      salaryText: salaryText,
+      experienceText: experienceText,
+      city: city
+    });
+    var jdText = jdClean.text.slice(0, 20000);
 
     if (!jobTitle && !company && !jdText) return null;
 
@@ -1762,6 +1980,14 @@
       activeText: activeText,
       jdText: jdText,
       metaText: U.ellipsis(metaText, 80),
+      /* 清理统计：面板与诊断都要能说清「正文被改过多少」，否则用户没法判断
+         模型看到的到底是不是页面原文。rawJd 取同一个节点，前后可比。 */
+      dirty: {
+        ui: jdClean.dropped,
+        glued: jdClean.glued,
+        rawJd: nodeText(jdEl || jdRes.el).length,
+        removed: jdClean.removed
+      },
       sources: {
         jobTitle: jobTitleSource,
         company: companySource,
@@ -1776,14 +2002,18 @@
 
   function SalClean(t) {
     var s = U.clean(t).replace(/[‐‑‒–—−－]/g, '-');
-    if (typeof location !== 'undefined' && /(^|\.)zhipin\.com$/i.test(location.hostname || '')) {
-      s = s.replace(/[\uE031-\uE03A]/g, function (c) {
-        return String(c.charCodeAt(0) - 0xE031);
-      });
+    var hadPua = PUA_RE.test(s);
+    /* 私有区数字的映射是 BOSS 专有的：别的站点出现私有区字符说明不了它对应哪个数字，
+       硬解只会给出一个看起来很正常的错数字，所以直接放弃这个字段。 */
+    if (hadPua) {
+      if (!isZhipin()) return '';
+      s = decodeDigits(s);
     }
     var m = s.match(SALARY_RE);
     if (m) return m[0];
-    if (/[\uE000-\uF8FF\uFFFD]/.test(s)) return '';
+    /* 私有区字符解不出来就返回空：残缺的「-K」比「未取到」更容易误导人，
+       模型看到「-K」会当成真实区间去推理。 */
+    if (hadPua || PUA_RE.test(s)) return '';
     return s.length <= 24 ? s : '';
   }
 
@@ -1798,6 +2028,14 @@
     pathOf: pathOf,
     rectOf: rectOf,
     fontPx: fontPx,
+    /* 脏输入清理的零件：测试要能单独验证，诊断也要能引用同一套规则 */
+    cleanJdText: cleanJdText,
+    jdTextOf: jdTextOf,
+    narrowJd: narrowJd,
+    isUiLine: isUiLine,
+    isUiNode: isUiNode,
+    decodeDigits: decodeDigits,
+    SalClean: SalClean,
     CITIES: CITIES
   };
 })(typeof window !== 'undefined' ? window : globalThis);
@@ -1820,7 +2058,7 @@
         return global.chrome.runtime.getManifest().version;
       }
     } catch (e) { /* 非扩展环境 */ }
-    return '0.2.4';
+    return '0.2.5';
   })();
 
   function brand() {
@@ -1884,6 +2122,7 @@
 .jr-f .s{flex:0 0 auto;font-size:10px;color:#9aa5b6;border:1px solid var(--soft);
   padding:0 4px;border-radius:3px;white-space:nowrap}
 .jr-f .s.miss{color:var(--bad);border-color:var(--badline);background:var(--badbg)}
+.jr-f .s.warn{color:var(--warn);border-color:var(--warnline);background:var(--warnbg)}
 .jr-f .v.miss{color:#aab3c2}
 
 .jr-sec{margin-bottom:11px}
@@ -2056,8 +2295,11 @@
 
   function fieldRow(label, value, source, mono) {
     var miss = !value;
+    var cls = source === '未取到' ? ' miss' : (source === '字形混淆' ? ' warn' : '');
     var srcBadge = source
-      ? '<span class="s' + (source === '未取到' ? ' miss' : '') + '">' + esc(source) + '</span>'
+      ? '<span class="s' + cls + '"' +
+        (source === '字形混淆' ? ' title="站点用私有字符替换了数字，未能解码；已置空，不发给模型"' : '') +
+        '>' + esc(source) + '</span>'
       : '';
     return (
       '<div class="jr-f">' +
@@ -2321,7 +2563,8 @@
       '<button class="jr-btn" data-act="diag">复制诊断</button>' +
       '</div>' +
       '<div class="jr-mini">JD 来源：' + esc(src.jd || '未取到') + ' · 共 ' + ev.jdLength +
-      ' 字 · 判定：' + esc(judgeLabel(d)) + ' · 仅个人使用，不采集他人信息</div>' +
+      ' 字' + (f.dirty && f.dirty.ui ? '（已清理 ' + f.dirty.ui + ' 处页面控件）' : '') +
+      ' · 判定：' + esc(judgeLabel(d)) + ' · 仅个人使用，不采集他人信息</div>' +
       '</div>';
   }
 

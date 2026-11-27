@@ -13,8 +13,9 @@
 (function (global) {
   'use strict';
 
-  /* 改了提示词就必须 +1：判定结果里存了它，否则"结论为什么变了"无法解释 */
-  var PROMPT_VERSION = 1;
+  /* 改了提示词就必须 +1：判定结果里存了它，否则"结论为什么变了"无法解释。
+     v2：字段可信度新增薪资未识别 / 正文已清理两条说明，旧缓存必须失效。 */
+  var PROMPT_VERSION = 2;
 
   /* JD 上限。DeepSeek 128k 上下文够用，但按字数计费，且超长 JD 的尾部
      往往是"任职要求"，所以截断时保留头尾、砍中间。 */
@@ -98,8 +99,9 @@
 
   /* 字段可信度：把"这个字段是怎么来的"告诉模型。
      实测里最容易出错的是公司名——BOSS 列表页的兜底会把左侧卡片的公司名带进来。 */
-  function sourceNotes(sources) {
+  function sourceNotes(sources, fields) {
     sources = sources || {};
+    fields = fields || {};
     var notes = [];
     if (sources.company === '列表匹配') {
       notes.push('公司名取自招聘网站左侧列表卡片，可能不是本岗位所属公司，请勿据此判断公司性质或规模。');
@@ -112,9 +114,19 @@
     if (sources.jobTitle === '结构推断') {
       notes.push('职位名由页面版式推断得出，可能与真实岗位名有偏差。');
     }
+    /* 薪资被站点字形混淆且没解出来：此时宁可让模型知道"这个字段没有"，
+       也不要让它从残缺文本里读出区间。 */
+    if (sources.salary === '字形混淆') {
+      notes.push('薪资字段因站点用私有字符替换了数字而未能识别，请勿推测或补全薪资数字。');
+    }
     var jd = sources.jd;
     if (jd === '启发式' || jd === '结构推断') {
       notes.push('岗位正文由页面结构推断得出，可能混入了页面上的其他文字。');
+    }
+    /* 清理过就说清楚：既避免模型把控件文案当岗位内容，也避免用户以为是原文被改写。 */
+    var dirty = fields.dirty && fields.dirty.ui;
+    if (dirty > 0) {
+      notes.push('岗位正文已剔除 ' + dirty + ' 处页面控件文字（收藏 / 分享 / 举报 / 扫码等），其余为原文。');
     }
     return notes;
   }
@@ -149,7 +161,7 @@
       '</jd>'
     ].join('\n');
 
-    var notes = sourceNotes(input.sources || fields.sources);
+    var notes = sourceNotes(input.sources || fields.sources, fields);
     var trust = notes.length
       ? '\n\n=== 字段可信度 ===\n' + notes.join('\n')
       : '';

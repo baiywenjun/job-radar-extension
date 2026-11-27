@@ -181,11 +181,15 @@
           var value = el.getAttribute(name);
           return value ? name + '=' + q(value) : '';
         }).filter(Boolean).join(' ');
+      /* 解码结果一起打出来：站点若换了字符映射，这里会与页面显示的数字对不上，
+         那是「薪资抽错」最直接的证据（比事后怀疑插件有用得多）。 */
+      var decoded = E && E.decodeDigits ? E.decodeDigits(t) : t;
       found.push({
         right: r.left >= (global.innerWidth || 1400) * 0.35,
         top: r.top,
         line: '  ' + q(t) + ' [' + codes + '] font=' + cut(family, 70) + ' ' +
           (E && E.pathOf ? E.pathOf(el, 4) : sig(el)) + ' ' + box(el) +
+          (decoded !== t ? ' 解码=' + q(decoded) : '') +
           (attrs ? ' ' + attrs : '')
       });
     }
@@ -272,6 +276,20 @@
       lines.push('  来源: ' + JSON.stringify(f.sources));
     }
     lines.push('');
+    /* 正文清理必须留痕：用户看到「模型引用了收藏按钮」时要能确认是站点结构问题，
+       而不是插件抽错。这里列出被剔除的样本行。 */
+    if (f && f.dirty) {
+      lines.push('【正文清理】');
+      lines.push('  原始 ' + f.dirty.rawJd + ' 字 → 送模型 ' + f.jdText.length +
+        ' 字，剔除 ' + f.dirty.ui + ' 处控件 / 噪声' +
+        (f.dirty.glued ? '（其中粘连片段 ' + f.dirty.glued + '）' : ''));
+      if (f.dirty.removed && f.dirty.removed.length) {
+        f.dirty.removed.forEach(function (s) {
+          lines.push('    - ' + s);
+        });
+      }
+      lines.push('');
+    }
     lines.push.apply(lines, judgeSection());
     lines.push('');
 

@@ -551,7 +551,9 @@
     var miss = [];
     if (!f.jobTitle) miss.push('职位名');
     if (!f.company) miss.push('公司名');
-    if (!f.salaryText) miss.push('薪资');
+    if (!f.salaryText) {
+      miss.push(f.sources && f.sources.salary === '字形混淆' ? '薪资（站点字形混淆）' : '薪资');
+    }
     if (!f.experienceText) miss.push('经验');
     if (!f.jdText || f.jdText.length < 120) miss.push('JD 正文');
     var got = 'JD ' + (f.jdText ? f.jdText.length : 0) + ' 字' +
@@ -599,10 +601,13 @@
   /* f 为 null 时只在标准详情 URL 下重试：BOSS 的侧滑详情 URL 不变，
      此时「抽不到」多半是还没选中岗位，盲目重试 6 轮只会在列表页空转。
      JD 已抓到时标题缺失只给两次机会：标题可能晚于正文渲染，但不会一直不来。 */
-  function shouldRetry(f, isDetail) {
+  function shouldRetry(f, isDetail, hasPane) {
     if (retry >= RETRY_MAX) return false;
     if (!f) return isDetail;
-    if (f.jdText.length < 120) return true;
+    /* 正文太短时值得再等：标准详情页、详情区已展开、或刚才已经渲染过面板
+       （切换岗位的空窗期属于这种）。反之，纯列表页的「JD」是从卡片摘要拼的，
+       等六轮也等不到正文，只会让提示卡晚 4 秒出现。 */
+    if (f.jdText.length < 120) return isDetail || !!hasPane || hasRendered;
     if (!f.jobTitle) return retry < 2;
     return false;
   }
@@ -618,7 +623,7 @@
     var ok = !!f && !!f.jobTitle && hasPane && f.jdText.length >= minJd;
 
     /* SPA 详情面板常延迟渲染：抽不到时先重试，不要立刻判死 */
-    if (!ok && shouldRetry(f, isDetail)) {
+    if (!ok && shouldRetry(f, isDetail, hasPane)) {
       retry++;
       if (hasRendered) P.setBusy('正在读取岗位…');
       scheduleRun(700);

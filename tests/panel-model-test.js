@@ -368,6 +368,25 @@ check('宿主被移出文档后 update 不抛错',
     try { P.update(() => {}); return true; } catch (e) { return false; }
   })());
 
+/* ---------- 8. 脏输入留痕：清理量 + 薪资字形混淆 ---------- */
+const d11 = makeData();
+d11.fields.dirty = { ui: 3, glued: 1, rawJd: 900, removed: ['取消收藏'] };
+P.show(d11, handlers);
+check('底部写明正文清理了几处控件',
+  /已清理 3 处页面控件/.test(panelText()), panelText().slice(-160));
+
+const d12 = makeData();
+d12.fields.salaryText = '';
+d12.fields.sources.salary = '字形混淆';
+P.show(d12, handlers);
+check('薪资行显示未取到', /薪资[\s\S]{0,20}未取到/.test(panelText()));
+const salBadge = shadow().querySelector('.jr-f .s.warn');
+check('字形混淆用警示样式标出', !!salBadge && salBadge.textContent === '字形混淆',
+  salBadge ? salBadge.textContent : '没找到 .s.warn');
+check('字形混淆带解释性 title',
+  !!salBadge && /私有字符/.test(salBadge.getAttribute('title') || ''),
+  salBadge && salBadge.getAttribute('title'));
+
 console.log('\n结果：通过 ' + pass + ' / 失败 ' + fail);
 dom.window.close();
 process.exit(fail ? 1 : 0);
