@@ -193,6 +193,43 @@
     return found.slice(0, 20).map(function (x) { return x.line; });
   }
 
+  /* 模型侧的失败详情。内容脚本看不到 service worker 的网络面板，
+     这段文本是用户唯一能把「模型到底回了什么」带出来的通道。 */
+  var REASON_TEXT = {
+    thinking: '模型只输出了思考过程，正文为空（多见思考型模型 + 输出上限太小）',
+    length: '正文被 maxOutputTokens 截断，未写出结论',
+    'no-frames': '流式请求一帧数据都没收到（网关可能不支持 SSE，或返回了包装层）',
+    empty: '接口返回正常，但正文确实为空'
+  };
+
+  function judgeSection() {
+    var d = global.__jrJudgeDiag;
+    if (!d) return ['【模型判定】', '  本次未触发模型判定（可能未配置 Key / 标准，或仍在等待）'];
+    if (d.status !== 'failed') {
+      return ['【模型判定】', '  状态: ' + d.status];
+    }
+    var out = ['【模型判定】'];
+    out.push('  状态: 失败');
+    out.push('  时间: ' + (d.at || '—'));
+    out.push('  模型: ' + (d.model || '—') + ' @ ' + (d.baseOrigin || '—'));
+    out.push('  错误码: ' + (d.code || '—'));
+    out.push('  说明: ' + (d.error || '—'));
+    if (d.reason) {
+      out.push('  成因: ' + d.reason + ' —— ' + (REASON_TEXT[d.reason] || '未分类'));
+    }
+    out.push('  传输: ' + (d.streamed ? '流式' : '非流式') +
+      ' · sawEvent=' + String(d.sawEvent) +
+      ' · 数据帧=' + (d.frames || 0) +
+      ' · finish=' + (d.finish || '—') +
+      ' · 思考字数=' + (d.reasoningChars || 0));
+    if (d.usage) {
+      out.push('  usage: in ' + (d.usage.prompt_tokens || 0) +
+        ' / out ' + (d.usage.completion_tokens || 0));
+    }
+    if (d.detail) out.push('  原始片段: ' + cut(d.detail, 280));
+    return out;
+  }
+
   function report(adapter) {
     var d = doc();
     var lines = [];
@@ -223,6 +260,8 @@
       lines.push('  JD ' + f.jdText.length + ' 字');
       lines.push('  来源: ' + JSON.stringify(f.sources));
     }
+    lines.push('');
+    lines.push.apply(lines, judgeSection());
     lines.push('');
 
     lines.push('【选择器命中】');

@@ -383,6 +383,18 @@
       profileName: verdict.profileName
     };
 
+    try {
+      window.__jrJudgeDiag = {
+        status: 'ok',
+        at: new Date().toISOString(),
+        model: verdict.model,
+        baseOrigin: cfg && cfg.settings ? cfg.settings.baseOrigin : '',
+        ms: verdict.ms,
+        grade: verdict.grade,
+        usage: verdict.usage || null
+      };
+    } catch (e) { /* 诊断是附加能力 */ }
+
     /* 用 show 而不是重建宿主：mount() 会复用现有 host，只换 Shadow DOM 内容 */
     P.show(data, handlers());
     console.log(TAG + ' 模型结论 · ' + (data.fields.jobTitle || '未取到职位名') +
@@ -399,7 +411,38 @@
       return;
     }
 
-    data.judge = { status: 'failed', code: code, error: (e && e.error) || code };
+    data.judge = {
+      status: 'failed',
+      code: code,
+      error: (e && e.error) || code,
+      reason: (e && e.reason) || '',
+      finish: (e && e.finish) || '',
+      sawEvent: e && e.sawEvent,
+      frames: (e && e.frames) || 0,
+      reasoningChars: (e && e.reasoningChars) || 0
+    };
+
+    /* 模型失败详情留给「复制诊断」：用户开不了 F12，也看不到 service worker 的
+       网络面板，这段文本是他唯一能把「模型到底回了什么」带出来的通道。 */
+    try {
+      window.__jrJudgeDiag = {
+        status: 'failed',
+        at: new Date().toISOString(),
+        code: code,
+        error: (e && e.error) || code,
+        detail: (e && e.detail) || '',
+        reason: (e && e.reason) || '',
+        finish: (e && e.finish) || '',
+        sawEvent: e && e.sawEvent,
+        frames: (e && e.frames) || 0,
+        streamed: !!(e && e.streamed),
+        reasoningChars: (e && e.reasoningChars) || 0,
+        usage: (e && e.usage) || null,
+        model: cfg && cfg.settings ? cfg.settings.model : '',
+        baseOrigin: cfg && cfg.settings ? cfg.settings.baseOrigin : ''
+      };
+    } catch (err) { /* 诊断是附加能力，不能影响主流程 */ }
+
     P.show(data, handlers());
     /* 内容脚本的 console.warn 会被 Chrome 计入扩展错误面板，这里统一用 info */
     logOnce('judge-fail:' + code + ':' + location.pathname,

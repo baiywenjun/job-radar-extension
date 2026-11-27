@@ -337,5 +337,34 @@ check('诊断：骨架里能看到真实职位名', rep.indexOf('高级devops工
 check('诊断：列出大字号元素', rep.indexOf('【全页大字号元素') >= 0 && /20px "高级devops工程师"/.test(rep));
 check('诊断：体量可控（< 40KB）', rep.length < 40000, '实际 ' + rep.length + ' 字符');
 
+/* ---------- 用例 7：模型失败详情要能带出来（用户开不了 F12） ---------- */
+globalThis.__jrJudgeDiag = {
+  status: 'failed',
+  at: '2026-11-27T05:00:00.000Z',
+  code: 'E_EMPTY',
+  error: '模型只输出了思考过程，没写出结论',
+  detail: '先看 JD 是否涉及私有化交付…再核对是否要求量产经验…',
+  reason: 'thinking',
+  finish: 'length',
+  sawEvent: true,
+  frames: 3,
+  streamed: true,
+  reasoningChars: 28,
+  usage: { prompt_tokens: 900, completion_tokens: 1200 },
+  model: 'deepseek-reasoner',
+  baseOrigin: 'https://api.deepseek.com'
+};
+const rep2 = DG.report(adapter);
+check('诊断：含模型判定段', rep2.indexOf('【模型判定】') >= 0);
+check('诊断：写明失败成因与解释', /成因: thinking —— 模型只输出了思考过程/.test(rep2), rep2.split('\n').filter((l) => l.indexOf('成因') >= 0).join(' / '));
+check('诊断：带出模型名与网关', /deepseek-reasoner @ https:\/\/api\.deepseek\.com/.test(rep2));
+check('诊断：带出传输与帧数', /sawEvent=true · 数据帧=3 · finish=length · 思考字数=28/.test(rep2));
+check('诊断：带出原始思考片段', rep2.indexOf('先看 JD 是否涉及私有化交付') >= 0);
+check('诊断：带出 token 用量', /in 900 \/ out 1200/.test(rep2));
+
+delete globalThis.__jrJudgeDiag;
+const rep3 = DG.report(adapter);
+check('诊断：未触发判定时明说未触发', /本次未触发模型判定/.test(rep3));
+
 console.log('\n' + pass + ' 通过 / ' + fail + ' 失败');
 process.exit(fail ? 1 : 0);

@@ -326,6 +326,15 @@ chrome.runtime.onConnect.addListener(function (port) {
         code: code,
         error: String((e && e.message) || e || '未知错误'),
         detail: (e && e.detail) || '',
+        /* 空内容这一类失败必须带上成因，否则面板和诊断都无法区分
+           「模型不说话」和「网关不支持流式」 */
+        reason: (e && e.reason) || '',
+        finish: (e && e.finish) || '',
+        sawEvent: e && e.sawEvent,
+        frames: (e && e.frames) || 0,
+        streamed: !!(e && e.streamed),
+        reasoningChars: (e && e.reasoningChars) || 0,
+        usage: (e && e.usage) || null,
         retryable: RETRYABLE[code] === 1
       });
     }).then(function () {

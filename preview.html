@@ -1820,7 +1820,7 @@
         return global.chrome.runtime.getManifest().version;
       }
     } catch (e) { /* 非扩展环境 */ }
-    return '0.2.1';
+    return '0.2.2';
   })();
 
   function brand() {
@@ -2074,7 +2074,13 @@
       if (j.ms) parts.push((j.ms / 1000).toFixed(1) + 's');
       return parts.join(' · ');
     }
-    if (j.status === 'failed') return '本地规则（模型失败：' + (j.error || j.code || '未知') + '）';
+    if (j.status === 'failed') {
+      /* 底部是一行小字，失败原因可能带重试说明（很长）。
+         截断到能看懂成因，细节留给「复制诊断」。 */
+      var why = String(j.error || j.code || '未知');
+      if (why.length > 42) why = why.slice(0, 42) + '…';
+      return '本地规则（模型失败：' + why + '）';
+    }
     if (j.status === 'off') return '本地规则（' + (j.error || '未配置模型 API') + '）';
     if (j.status === 'manual') return '本地规则（自动判定已关闭）';
     if (j.status === 'no-profile') return '本地规则（未设置判定标准）';

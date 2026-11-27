@@ -93,10 +93,12 @@
     var buf = '';
     var raw = '';
     var content = '';
+    var reasoning = '';
     var usage = null;
     var model = '';
     var finish = '';
     var sawEvent = false;
+    var frames = 0;
 
     function handleFrame(frame) {
       var lines = String(frame).split('\n');
@@ -116,11 +118,21 @@
           continue;   // 心跳、注释行、半帧残留都跳过
         }
         sawEvent = true;
+        frames++;
         if (obj.model) model = obj.model;
         if (obj.usage) usage = obj.usage;
 
         var ch = obj.choices && obj.choices[0];
         if (!ch) continue;
+        /* 思考型模型（deepseek-reasoner / 部分网关的思考模式）先吐 reasoning_content，
+           正文在 content。只认 content 会把「思考吃光预算」误判成「模型没说话」。 */
+        if (ch.delta) {
+          if (typeof ch.delta.reasoning_content === 'string' && ch.delta.reasoning_content) {
+            reasoning += ch.delta.reasoning_content;
+          } else if (typeof ch.delta.reasoning === 'string' && ch.delta.reasoning) {
+            reasoning += ch.delta.reasoning;
+          }
+        }
         if (ch.delta && typeof ch.delta.content === 'string' && ch.delta.content) {
           content += ch.delta.content;
           if (onDelta) onDelta(content.length);
@@ -157,10 +169,22 @@
             if (env.model) model = env.model;
             if (env.usage) usage = env.usage;
             if (ch.finish_reason) finish = ch.finish_reason;
+            if (typeof ch.message.reasoning_content === 'string') {
+              reasoning = ch.message.reasoning_content;
+            }
           }
         } catch (e) { /* 不是完整 JSON，交给上层报 E_BAD_JSON */ }
       }
-      return { content: content, usage: usage, model: model, finish: finish, sawEvent: sawEvent, raw: raw };
+      return {
+        content: content,
+        reasoning: reasoning,
+        usage: usage,
+        model: model,
+        finish: finish,
+        sawEvent: sawEvent,
+        frames: frames,
+        raw: raw
+      };
     }
 
     return pump();
@@ -236,8 +260,12 @@
             resolve({
               data: {
                 model: out.model,
-                choices: [{ message: { content: out.content }, finish_reason: out.finish }],
-                usage: out.usage
+                choices: [{
+                  message: { content: out.content, reasoning_content: out.reasoning },
+                  finish_reason: out.finish
+                }],
+                usage: out.usage,
+                _jr: { sawEvent: out.sawEvent, frames: out.frames, raw: clip(out.raw) }
               },
               ms: Date.now() - started,
               streamed: true,
@@ -288,6 +316,53 @@
     if (ch.message && typeof ch.message.content === 'string') return ch.message.content;
     if (typeof ch.text === 'string') return ch.text;
     return '';
+  }
+
+  /* 正文之外的「思考内容」。只用于判断空内容的原因，不进结论、不展示。 */
+  function pickReasoning(data) {
+    var ch = data && data.choices && data.choices[0];
+    if (!ch || !ch.message) return '';
+    if (typeof ch.message.reasoning_content === 'string') return ch.message.reasoning_content;
+    if (typeof ch.message.reasoning === 'string') return ch.message.reasoning;
+    return '';
+  }
+
+  /* 空内容有四种成因，处理方式和用户该做的事完全不同，不能合并成一句话：
+   *   thinking  — 思考型模型把输出预算用在 reasoning 上，正文还没开始就结束了
+   *   length    — 正文写到一半被 max_tokens 截断（json 不完整，但至少非空）
+   *   no-frames — 流式请求一帧数据都没收到（网关不支持 SSE，或返回了包装层）
+   *   empty     — 接口正常但正文确实为空
+   */
+  var EMPTY_TEXT = {
+    thinking: '模型只输出了思考过程，没写出结论',
+    length: '输出被 maxOutputTokens 截断，未写出结论',
+    'no-frames': '接口未返回任何流式数据帧',
+    empty: '模型返回了空内容'
+  };
+
+  function emptyInfo(r) {
+    var data = (r && r.data) || {};
+    var ch = data.choices && data.choices[0];
+    var finish = (ch && ch.finish_reason) || '';
+    var reasoning = pickReasoning(data);
+    var meta = data._jr || {};
+    var streamed = !!(r && r.streamed);
+
+    var reason = 'empty';
+    if (reasoning) reason = 'thinking';
+    else if (finish === 'length') reason = 'length';
+    else if (streamed && meta.sawEvent === false) reason = 'no-frames';
+
+    return {
+      reason: reason,
+      finish: finish,
+      sawEvent: streamed ? meta.sawEvent !== false : true,
+      frames: meta.frames || 0,
+      streamed: streamed,
+      reasoningChars: reasoning.length,
+      usage: data.usage || null,
+      detail: clip(reasoning || meta.raw || JSON.stringify(data))
+    };
   }
 
   /* 测试连接：发一个极小的真实请求，验证 Key、模型名、baseURL 三者都通。
@@ -375,14 +450,18 @@
       jsonMode: cfg.jsonMode,
       onDelta: ctx.onDelta,
       signal: ctx.signal,
-      maxTokens: ctx.settings.maxOutputTokens
+      maxTokens: cfg.maxTokens || ctx.settings.maxOutputTokens
     }).then(function (r) {
       var content = pickContent(r.data);
       var ch = r.data && r.data.choices && r.data.choices[0];
       var finish = (ch && ch.finish_reason) || '';
 
       if (!content) {
-        throw jerr('E_BAD_JSON', '模型未返回内容', { reason: 'empty' });
+        /* 单独一个错误码：空内容的修法与「json 格式错」不同
+           （要放大输出预算并改用非流式），不能混进 E_BAD_JSON 的重试分支。 */
+        var info = emptyInfo(r);
+        var e = jerr('E_EMPTY', EMPTY_TEXT[info.reason] || EMPTY_TEXT.empty, info);
+        throw e;
       }
 
       var v;
@@ -427,6 +506,8 @@
       streamUsage: true
     };
     var parseRetried = false;
+    var emptyRetried = false;
+    var emptyFirst = null;
     var jsonDegraded = false;
 
     function step() {
@@ -447,6 +528,45 @@
             /stream_options|include_usage/i.test(detail)) {
           cfg.streamUsage = false;
           return step();
+        }
+
+        /* 空内容：换非流式（排除网关不认 SSE）+ 放大输出预算
+           （思考型模型会把 reasoning 写满 max_tokens，正文一个字都写不出来）。
+           只重试一次：预算翻倍后还空，就是模型或 Key 的问题，继续试只是烧钱。 */
+        if (e.code === 'E_EMPTY') {
+          if (!emptyRetried) {
+            emptyRetried = true;
+            /* 保留首次成因：重试改成非流式后，成因往往退化成 "empty"，
+               而最早的 no-frames / thinking 才是用户需要看到的线索。 */
+            emptyFirst = {
+              reason: e.reason,
+              detail: e.detail,
+              finish: e.finish,
+              sawEvent: e.sawEvent,
+              frames: e.frames,
+              reasoningChars: e.reasoningChars
+            };
+            cfg.stream = false;
+            var base = Number(ctx.settings.maxOutputTokens) || 1200;
+            var want = (e.reason === 'thinking' || e.reason === 'length' || e.reason === 'no-frames')
+              ? Math.max(base * 2, 4096)
+              : Math.max(base * 2, 1600);
+            cfg.maxTokens = Math.min(want, 8192);
+            return step();
+          }
+          if (emptyFirst) {
+            e.reason = emptyFirst.reason || e.reason;
+            e.detail = emptyFirst.detail || e.detail;
+            e.finish = emptyFirst.finish || e.finish;
+            e.sawEvent = emptyFirst.sawEvent;
+            e.frames = emptyFirst.frames || e.frames;
+            e.reasoningChars = emptyFirst.reasoningChars || e.reasoningChars;
+            e.message = (EMPTY_TEXT[e.reason] || e.message) +
+              '（已放大输出上限至 ' + cfg.maxTokens + ' 并改用非流式重试）';
+          } else {
+            e.message += '（已放大输出上限至 ' + cfg.maxTokens + ' 并改用非流式重试）';
+          }
+          throw e;
         }
 
         /* 格式类失败只再试一次，且换成最保守的组合：非流式 + 不带 json 模式 */
@@ -548,6 +668,9 @@
     hasPermission: hasPermission,
     classify: classify,
     pickContent: pickContent,
+    pickReasoning: pickReasoning,
+    emptyInfo: emptyInfo,
+    EMPTY_TEXT: EMPTY_TEXT,
     jerr: jerr,
     CHAT_PATH: CHAT_PATH
   };
