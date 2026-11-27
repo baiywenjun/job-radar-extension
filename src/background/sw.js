@@ -10,13 +10,16 @@ importScripts(
   '../common/profiles.js',
   '../common/prompt.js',
   '../common/verdict.js',
+  '../common/history.js',
   '../common/db.js',
+  'persist.js',
   'judge.js'
 );
 
 var S = JR_SETTINGS;
 var P = JR_PROFILES;
 var J = JR_JUDGE;
+var H = JR_HISTORY;
 
 /* 日期口径统一放在 judge.js：usage 的主键与面板显示必须永远一致，
    两处各算一遍迟早在时区或跨零点上对不上。 */
@@ -94,7 +97,10 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     PAYLOAD_GET: 1,
     PAYLOAD_CLEAR: 1,
     JOB_PATCH: 1,
-    VERDICTS_ALL: 1
+    VERDICTS_ALL: 1,
+    /* 判定轨迹含每次判定的分数与花费，属于"这个人怎么用这个工具"的行为数据，
+       内容脚本没有理由读到。 */
+    VERDICT_LOG: 1
   };
   if (PRIVATE[msg.type] && !fromExtensionPage(sender)) return deny(sendResponse);
 
@@ -271,13 +277,17 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
       JR_DB.getUsage(todayKey()),
       P.count(),
       listUsageSafe(monthKey()),
-      S.get().catch(function () { return {}; })
+      S.get().catch(function () { return {}; }),
+      JR_DB.countLog().catch(function () { return 0; })
     ]).then(function (r) {
       var month = sumUsage(r[4]);
       var s = r[5] || {};
       return {
         jobs: r[0],
+        /* verdicts 是"岗位 × 标准"的缓存条数，logged 是"判过多少次"。
+           两个数不一样很正常：同一岗位重判 3 次，前者 +0，后者 +3。 */
         verdicts: r[1],
+        logged: r[6] || 0,
         usageToday: r[2],
         profiles: r[3],
         usageMonth: month,
@@ -319,6 +329,17 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
       return { list: list };
     }), sendResponse);
   }
+
+  /* 某个岗位的判定轨迹（时间正序）。检查器打开时才拉，
+     不放进 VERDICTS_ALL：全量轨迹会随"判过多少次"无限长，
+     而列表页一条都用不上。 */
+  if (msg.type === 'VERDICT_LOG') {
+    var logKey = String(msg.key || '');
+    if (!logKey) return reply(Promise.resolve({ list: [] }), sendResponse);
+    return reply(JR_DB.listLog(logKey).then(function (list) {
+      return { key: logKey, list: list };
+    }), sendResponse);
+  }
 });
 
 /* ---------- 判定端口 ----------
@@ -334,15 +355,9 @@ var RETRYABLE = {
   E_RATE_LIMIT: 1
 };
 
+/* 落库顺序（缓存 → 用量 → 轨迹）封装在 persist.js，那里有注释说明为什么不能换序 */
 function persistVerdict(v, date) {
-  return JR_DB.putVerdict(v).then(function () {
-    return JR_DB.bumpUsage(date, {
-      calls: 1,
-      inTokens: (v.usage && v.usage.in) || 0,
-      outTokens: (v.usage && v.usage.out) || 0,
-      cost: v.cost || 0
-    });
-  });
+  return JR_PERSIST.save(JR_DB, H, v, date);
 }
 
 chrome.runtime.onConnect.addListener(function (port) {

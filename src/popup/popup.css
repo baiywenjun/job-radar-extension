@@ -276,3 +276,31 @@ td.acts{white-space:nowrap;text-align:right}
 td.acts .open{border:none;background:transparent;color:#c3cad6;cursor:pointer;font-size:13px;line-height:1;padding:2px 3px;border-radius:4px}
 td.acts .open:hover{background:var(--accentbg);color:var(--accent)}
 .insp-body a{color:var(--accent)}
+
+/* ---------- 判定历史（S5） ---------- */
+.insp-hist{font-size:12px}
+.hsum{font-size:12.5px;font-weight:600;color:var(--ink);margin-bottom:2px}
+.hdet{font-size:11.5px;color:var(--ink2);margin-bottom:8px}
+/* 轨迹条：从左到右是时间轴，点的颜色就是档位，下面标分数 */
+.htrack{display:flex;align-items:flex-start;flex-wrap:wrap;padding:4px 0 8px;margin-bottom:4px;border-bottom:1px dashed var(--line)}
+.hpt{display:flex;flex-direction:column;align-items:center;gap:2px;min-width:32px}
+.hpt i{width:10px;height:10px;border-radius:50%;background:#cbb9a5;box-shadow:0 0 0 1px var(--line),0 0 0 3px #fff}
+.hpt b{font-size:10.5px;font-weight:700;color:var(--ink2);font-variant-numeric:tabular-nums}
+.hpt.strong i{background:var(--good);box-shadow:0 0 0 1px var(--good),0 0 0 3px #fff}
+.hpt.neutral i{background:var(--accent);box-shadow:0 0 0 1px var(--accent),0 0 0 3px #fff}
+.hpt.weak i{background:#c98a1e;box-shadow:0 0 0 1px #c98a1e,0 0 0 3px #fff}
+.hpt.poor i{background:var(--bad);box-shadow:0 0 0 1px var(--bad),0 0 0 3px #fff}
+.hpt.insufficient i,.hpt.irrelevant i{background:#b9c2d0;box-shadow:0 0 0 1px #b9c2d0,0 0 0 3px #fff}
+.hline{width:14px;height:2px;background:var(--line);margin-top:5px;flex:0 0 auto}
+/* 逐条：最新在上 */
+.hrow{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:5px 0;border-bottom:1px solid var(--soft);font-size:11.5px;color:var(--ink2)}
+.hrow:last-child{border-bottom:none}
+.hwhen{color:var(--ink3);font-variant-numeric:tabular-nums;min-width:108px}
+.hscore{min-width:26px;text-align:right;font-size:12.5px;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums}
+.hdelta{min-width:38px;font-size:11px;font-weight:700;color:var(--ink3)}
+.hdelta.up{color:var(--good)}
+.hdelta.down{color:var(--bad)}
+.hprof{margin-left:auto;font-size:11px;color:var(--ink3);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hmark{font-size:10px;padding:0 6px;border-radius:999px;background:var(--accentbg);color:#a34400;border:1px solid var(--accentline)}
+.hmark.info{background:var(--soft);color:var(--ink3);border-color:var(--line)}
+.hmark.bad{background:var(--badbg);color:var(--bad);border-color:var(--badline)}

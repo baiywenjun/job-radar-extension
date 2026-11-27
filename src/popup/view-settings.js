@@ -76,7 +76,9 @@
     el.stats.innerHTML =
       cell(st.jobs || 0, '岗位记录') +
       cell(st.profiles || 0, '判定标准') +
-      cell(st.verdicts || 0, '判定缓存') +
+      cell(st.verdicts || 0, '判定缓存',
+        '按「岗位 × 标准」去重，同一岗位重判不会增加这个数。到目前共判过 ' +
+        (st.logged || 0) + ' 次，轨迹在岗位库的检查器里看。') +
       cell(u.calls || 0, '今日调用') +
       cell('¥' + money(u.cost), '今日花费') +
       cell('¥' + money(m.cost), '本月花费');
@@ -90,8 +92,9 @@
     }
   }
 
-  function cell(n, label) {
-    return '<div class="cell"><div class="n">' + n + '</div><div class="l">' + U.escapeHtml(label) + '</div></div>';
+  function cell(n, label, hint) {
+    return '<div class="cell"' + (hint ? ' title="' + U.escapeHtml(hint) + '"' : '') +
+      '><div class="n">' + n + '</div><div class="l">' + U.escapeHtml(label) + '</div></div>';
   }
 
   function loadStats() {

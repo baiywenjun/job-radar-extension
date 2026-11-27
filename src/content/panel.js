@@ -14,7 +14,7 @@
         return global.chrome.runtime.getManifest().version;
       }
     } catch (e) { /* 非扩展环境 */ }
-    return '0.2.6';
+    return '0.3.0';
   })();
 
   function brand() {

@@ -7,9 +7,13 @@
   'use strict';
 
   var DB_NAME = 'jr-radar';
-  var DB_VER = 2;
+  /* v3：新增追加式的判定日志（verdictlog）。
+     verdicts 的主键是 [key, profileId]，重判会覆盖，适合做缓存但不留轨迹；
+     日志表只增不改，检查器的「判定历史」读它。 */
+  var DB_VER = 3;
   var STORE = 'jobs';
   var VERDICTS = 'verdicts';
+  var LOG = 'verdictlog';
   var USAGE = 'usage';
   var dbPromise = null;
 
@@ -39,6 +43,14 @@
         /* v2：按天累计的调用量与 token，用于每日限额与成本展示 */
         if (!db.objectStoreNames.contains(USAGE)) {
           db.createObjectStore(USAGE, { keyPath: 'date' });
+        }
+
+        /* v3：判定轨迹。自增主键，按岗位 key 建索引——
+           同一岗位可能有几十条，但读的时候永远只按 key 查，不需要全表扫。 */
+        if (!db.objectStoreNames.contains(LOG)) {
+          var lg = db.createObjectStore(LOG, { keyPath: 'id', autoIncrement: true });
+          lg.createIndex('key', 'key');
+          lg.createIndex('createdAt', 'createdAt');
         }
       };
       req.onsuccess = function (e) {
@@ -273,8 +285,92 @@
     });
   }
 
+  /* 清空判定：缓存与轨迹一起清。
+     只清 verdicts 的话，检查器里还能看到一段"历史"，
+     而它对应的最新结论已经没了——看起来就像清空没生效。 */
   function clearVerdicts() {
-    return withStore(VERDICTS, 'readwrite', function (store, set) {
+    return open().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction([VERDICTS, LOG], 'readwrite');
+        tx.objectStore(VERDICTS).clear();
+        tx.objectStore(LOG).clear();
+        tx.oncomplete = function () { resolve(true); };
+        tx.onerror = function () { reject(tx.error); };
+        tx.onabort = function () { reject(tx.error || new Error('transaction aborted')); };
+      });
+    });
+  }
+
+  /* ---------- v3：判定轨迹 ---------- */
+
+  var LOG_MAX_DEFAULT = 30;
+
+  function logCap() {
+    var H = global.JR_HISTORY;
+    var n = H && Number(H.MAX_PER_JOB);
+    return n > 0 ? n : LOG_MAX_DEFAULT;
+  }
+
+  /* 追加一条轨迹。超过每岗位上限定额时顺手删最旧的。
+     读写删必须在同一个 readwrite 事务里：拆成两个事务的话，
+     两次快速重判并发时可能都读到"还没超上限"，于是都不删。 */
+  function appendLog(entry) {
+    if (!entry || !entry.key) return Promise.resolve(null);
+    var cap = logCap();
+    return open().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction(LOG, 'readwrite');
+        var store = tx.objectStore(LOG);
+        var id = null;
+
+        tx.oncomplete = function () {
+          resolve(Object.assign({}, entry, { id: id }));
+        };
+        tx.onerror = function () { reject(tx.error); };
+        tx.onabort = function () { reject(tx.error || new Error('transaction aborted')); };
+
+        var addReq = store.add(entry);
+        addReq.onerror = function () { reject(addReq.error); };
+        addReq.onsuccess = function () {
+          id = addReq.result;
+          var listReq = store.index('key').getAll(entry.key);
+          listReq.onerror = function () { reject(listReq.error); };
+          listReq.onsuccess = function () {
+            var list = (listReq.result || []).slice().sort(function (a, b) {
+              return (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0);
+            });
+            var extra = list.length - cap;
+            for (var i = 0; i < extra; i++) store.delete(list[i].id);
+          };
+        };
+      });
+    });
+  }
+
+  /* 按岗位取轨迹，**时间正序**（画轨迹条时从左到右就是时间轴）。
+     注意与 listVerdicts 的降序不同，这是刻意的不一致：那边是"最新一条在哪"，
+     这边是"事情怎么发生的"。 */
+  function listLog(key) {
+    return withStore(LOG, 'readonly', function (store, set) {
+      var req = store.index('key').getAll(key);
+      req.onsuccess = function () {
+        var list = (req.result || []).slice().sort(function (a, b) {
+          return (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0);
+        });
+        set(list);
+      };
+    });
+  }
+
+  function countLog() {
+    return withStore(LOG, 'readonly', function (store, set) {
+      var req = store.count();
+      req.onsuccess = function () { set(req.result || 0); };
+    });
+  }
+
+  function clearLog() {
+    return withStore(LOG, 'readwrite', function (store, set) {
       store.clear();
       set(true);
     });
@@ -349,6 +445,10 @@
     listAllVerdicts: listAllVerdicts,
     countVerdicts: countVerdicts,
     clearVerdicts: clearVerdicts,
+    appendLog: appendLog,
+    listLog: listLog,
+    countLog: countLog,
+    clearLog: clearLog,
     bumpUsage: bumpUsage,
     getUsage: getUsage,
     listUsage: listUsage,
@@ -357,6 +457,7 @@
     DB_VER: DB_VER,
     STORE: STORE,
     VERDICTS: VERDICTS,
+    LOG: LOG,
     USAGE: USAGE,
     EMPTY_USAGE: EMPTY_USAGE
   };

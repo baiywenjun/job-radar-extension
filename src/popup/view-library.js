@@ -13,6 +13,7 @@
   var R = window.JR_RULES;
   var DB = window.JR_DB;
   var X = window.JR_EXPORT;
+  var H = window.JR_HISTORY;
 
   var all = [];
   var view = [];
@@ -20,6 +21,11 @@
 
   var verdictList = [];
   var verdictMap = {};      // key → 最近一次判定
+
+  /* key → 轨迹条目数组（时间正序）；undefined = 还没拉，null = 拉取失败。
+     这两种"空"必须区分：前者显示"读取中"，后者显示错误，
+     而真正的空数组才说明"这个岗位还没判过"。 */
+  var logCache = {};
 
   var inspectKey = '';
   var judgePort = null;
@@ -256,6 +262,86 @@
       '</div>';
   }
 
+  /* ---------- 判定历史（S5） ---------- */
+
+  /* 轨迹条 + 逐条列表。
+     顺序上刻意的相反：轨迹条从左到右是时间正序（像心电图），
+     逐条列表最新在上（找"刚才那次"不用往下滚）。 */
+  function historyHtml(entries) {
+    var tl = H.buildTimeline(entries);
+    var sum = H.describe(tl.stats);
+
+    var track = tl.rows.map(function (r) {
+      var e = r.entry;
+      var tip = U.fmtDateTime(e.createdAt) + ' · ' +
+        (e.profileName || '未命名标准') + ' v' + (e.profileVersion || 0) + ' · ' +
+        (e.score == null ? '无分数' : e.score + ' 分');
+      return '<span class="hpt ' + esc(e.grade || '') + '" title="' + esc(tip) + '">' +
+        '<i></i><b>' + (e.score == null ? '—' : e.score) + '</b></span>';
+    }).join('<span class="hline"></span>');
+
+    var rows = tl.rows.slice().reverse().map(function (r) {
+      var e = r.entry;
+      var delta = H.deltaText(r);
+      var dcls = delta.charAt(0) === '↑' ? ' up' : (delta.charAt(0) === '↓' ? ' down' : '');
+      var marks = [];
+      if (r.jdChanged === true) marks.push('<span class="hmark">正文有改动</span>');
+      if (r.profileChanged) marks.push('<span class="hmark info">换了标准</span>');
+      if (e.evidenceFlag === 'E_BAD_EVIDENCE') marks.push('<span class="hmark bad">引用多半查不到</span>');
+
+      return '<div class="hrow">' +
+        '<span class="hwhen">' + esc(U.fmtDateTime(e.createdAt)) + '</span>' +
+        '<span class="dry-grade ' + esc(e.grade || '') + '">' + esc(H.gradeLabel(e.grade)) + '</span>' +
+        '<span class="hscore">' + (e.score == null ? '—' : e.score) + '</span>' +
+        '<span class="hdelta' + dcls + '" title="与上一次判定比">' +
+          esc(delta || (r.profileChanged ? '不可比' : '')) + '</span>' +
+        '<span class="hprof">' + esc(e.profileName || '未命名标准') +
+          (e.profileVersion ? ' v' + e.profileVersion : '') + '</span>' +
+        marks.join('') +
+        '</div>';
+    }).join('');
+
+    return '<div class="hsum">' + esc(sum.main) + '</div>' +
+      (sum.detail ? '<div class="hdet">' + esc(sum.detail) + '</div>' : '') +
+      '<div class="htrack">' + track + '</div>' +
+      '<div class="hlist">' + rows + '</div>' +
+      '<div class="insp-note">跨标准的两条不比较分数——不同标准在回答不同的问题。' +
+      '「正文有改动」是按指纹（前 800 字哈希 + 总字数）判断的。</div>';
+  }
+
+  function historySection(job) {
+    var entries = logCache[job.key];
+    if (entries === undefined) {
+      return '<div class="insp-note">读取中…</div>';
+    }
+    if (entries === null) {
+      return '<div class="insp-note bad">读取判定历史失败，关掉扩展面板重开再试。</div>';
+    }
+    if (!entries.length) {
+      var judged = !!(verdictMap[job.key] || job.judgedAt);
+      return '<div class="insp-note">' + (judged
+        ? '这条结论是升级到 0.3.0 之前判的，那时还没有轨迹记录。之后再判一次就会开始积累。'
+        : '还没有用模型判过。判一次之后这里会显示档位怎么变。') + '</div>';
+    }
+    return historyHtml(entries);
+  }
+
+  function loadLog(key) {
+    return send({ type: 'VERDICT_LOG', key: key }).then(function (res) {
+      logCache[key] = (res && res.ok && res.list) ? res.list : null;
+      return logCache[key];
+    }).catch(function () {
+      logCache[key] = null;
+      return null;
+    });
+  }
+
+  function renderHistorySection(job) {
+    var box = elInspBody.querySelector ? elInspBody.querySelector('.insp-hist') : null;
+    if (!box) return;
+    box.innerHTML = historySection(job);
+  }
+
   function renderInspector(job) {
     var src = job.sources || {};
     var dirty = job.dirty || {};
@@ -297,6 +383,8 @@
         ? '<div class="insp-note bad">薪资被站点字形混淆且未能还原，模型看到的是空值。</div>' : '') +
       '</div>' +
       renderJudgeSection(job) +
+      '<div class="insp-sec"><h5>判定历史</h5><div class="insp-hist">' +
+        historySection(job) + '</div></div>' +
       '<div class="insp-sec"><h5>岗位正文</h5>' + jdHtml + '</div>' +
       '<div class="insp-sec"><h5>重新判定</h5>' +
         '<div class="insp-note">' +
@@ -315,8 +403,19 @@
     if (!job) return;
     inspectKey = key;
     judging = false;
+    /* 每次打开都重取一遍：上一次打开之后可能又在面板外判过（另一个窗口 /
+       页面上的面板），缓存直接复用会显示过期轨迹。 */
+    delete logCache[key];
     elInsp.style.display = 'flex';
     renderInspector(job);
+
+    var opening = key;
+    loadLog(key).then(function () {
+      /* 期间可能已经切到别的岗位：那就别往当前屏上糊上一个岗位的轨迹 */
+      if (inspectKey !== opening) return;
+      var fresh = byKey(opening);
+      if (fresh) renderHistorySection(fresh);
+    });
   }
 
   function closeInspector() {
@@ -384,7 +483,9 @@
             setJudgeResult('结论已拿到，但写回记录失败：' + (res.error || ''), true);
             return;
           }
-          return load().then(function () {
+          /* 先刷轨迹再重绘：后台已经写完（含 appendLog），但本地缓存还是旧的，
+             直接 load() 会画出一段"少了刚才这次"的轨迹。 */
+          return loadLog(job.key).then(load).then(function () {
             var fresh = byKey(job.key);
             if (fresh) renderInspector(fresh);
             setJudgeResult('已更新结论：' + gradeLabel(v.grade) + ' ' + (v.score || 0) + ' 分', false);

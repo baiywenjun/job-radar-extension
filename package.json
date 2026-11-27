@@ -1,11 +1,11 @@
 {
   "name": "job-radar",
-  "version": "0.2.6",
+  "version": "0.3.0",
   "private": true,
   "description": "岗位雷达 · JD 结构化记录仪（Chrome MV3 扩展）",
   "scripts": {
     "build:preview": "node tests/build-preview.js",
-    "test": "node tests/run-tests.js && node tests/settings-test.js && node tests/profiles-test.js && node tests/judge-test.js && node tests/judge-empty-test.js && node tests/judge-abort-test.js && node tests/limit-test.js && node tests/prompt-test.js && node tests/verdict-test.js && node tests/evidence-test.js && node tests/dirty-test.js && node tests/popup-test.js && node tests/dom-test.js && node tests/switch-test.js && node tests/listpage-test.js && node tests/geom-test.js && node tests/panel-model-test.js && node tests/judge-flow-test.js && node tests/dryrun-test.js && node tests/export-test.js && node tests/inspector-test.js && node tests/build-preview.js && node tests/preview-smoke.js"
+    "test": "node tests/run-tests.js && node tests/settings-test.js && node tests/profiles-test.js && node tests/judge-test.js && node tests/judge-empty-test.js && node tests/judge-abort-test.js && node tests/limit-test.js && node tests/prompt-test.js && node tests/verdict-test.js && node tests/evidence-test.js && node tests/dirty-test.js && node tests/history-test.js && node tests/db-log-test.js && node tests/persist-test.js && node tests/popup-test.js && node tests/dom-test.js && node tests/switch-test.js && node tests/listpage-test.js && node tests/geom-test.js && node tests/panel-model-test.js && node tests/judge-flow-test.js && node tests/dryrun-test.js && node tests/export-test.js && node tests/inspector-test.js && node tests/history-ui-test.js && node tests/build-preview.js && node tests/preview-smoke.js"
   },
   "keywords": [
     "chrome-extension",
@@ -14,6 +14,7 @@
   ],
   "license": "UNLICENSED",
   "devDependencies": {
+    "fake-indexeddb": "^6.2.8",
     "jsdom": "^31.0.1"
   }
 }

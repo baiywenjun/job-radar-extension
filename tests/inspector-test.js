@@ -109,6 +109,16 @@ const PROFILE = {
   version: 2, createdAt: 1, updatedAt: 2
 };
 
+/* k1 判过一次（只有一条轨迹），k2 是升级前的老记录（没有轨迹） */
+const logs = {
+  k1: [{
+    id: 1, key: 'k1', profileId: 'p_demo', profileName: 'FDE', profileVersion: 2,
+    grade: 'neutral', score: 63, jdHash: 'h1', jdChars: JD_FULL.length,
+    createdAt: Date.now() - 3600000, evidenceFlag: ''
+  }],
+  k2: []
+};
+
 const sentMessages = [];
 let patched = null;
 
@@ -151,6 +161,8 @@ win.chrome = {
           cb({ ok: true, list: [PROFILE], profile: PROFILE, fellBack: false });
         } else if (msg.type === 'VERDICTS_ALL') {
           cb({ ok: true, list: verdicts.slice() });
+        } else if (msg.type === 'VERDICT_LOG') {
+          cb({ ok: true, key: msg.key, list: (logs[msg.key] || []).slice() });
         } else if (msg.type === 'JOB_PATCH') {
           patched = msg;
           const job = jobs.filter((j) => j.key === msg.key)[0];
@@ -185,6 +197,7 @@ try {
   [
     '../common/util.js',
     '../common/rules.js',
+    '../common/history.js',
     '../common/settings.js',
     '../common/profiles.js',
     'export.js',
@@ -223,7 +236,7 @@ const $$ = (sel) => Array.prototype.slice.call(win.document.querySelectorAll(sel
   console.log('\n=== 检查器 ===');
   const titleLink = $$('#tbody .jt a')[0];
   titleLink.click();
-  await wait(10);
+  await wait(40);
 
   check('检查器可见', $('#inspector').style.display === 'flex', $('#inspector').style.display);
   check('标题带职位与公司',
@@ -254,6 +267,21 @@ const $$ = (sel) => Array.prototype.slice.call(win.document.querySelectorAll(sel
     $('#inspBody .dry-ev').textContent.indexOf('未能核实') !== -1);
   check('列出缺失项与风险',
     bodyText.indexOf('Kubernetes') !== -1 && bodyText.indexOf('外包性质存疑') !== -1);
+
+  /* ---------- 3.5 判定历史 ---------- */
+  console.log('\n=== 判定历史 ===');
+  const histText = $('#inspBody .insp-hist') ? $('#inspBody .insp-hist').textContent : '';
+  check('检查器里有判定历史段', $$('#inspBody .insp-sec h5').some((h) => h.textContent === '判定历史'));
+  check('按岗位拉了轨迹',
+    sentMessages.filter((m) => m.type === 'VERDICT_LOG' && m.key === 'k1').length === 1);
+  check('只判过一次时写明次数', histText.indexOf('判过 1 次') !== -1, histText);
+  check('只判过一次不写"跨 N 个标准"', histText.indexOf('跨 ') === -1, histText);
+  check('轨迹条有一个点', $$('#inspBody .htrack .hpt').length === 1,
+    String($$('#inspBody .htrack .hpt').length));
+  check('轨迹点的悬停说明带分数',
+    $$('#inspBody .htrack .hpt')[0].getAttribute('title').indexOf('63 分') !== -1,
+    $$('#inspBody .htrack .hpt')[0].getAttribute('title'));
+  check('只判过一次没有可比的上一条', $$('#inspBody .hlist .hdelta')[0].textContent === '');
 
   /* ---------- 4. 重新判定 ---------- */
   console.log('\n=== 重新判定 ===');
@@ -306,6 +334,9 @@ const $$ = (sel) => Array.prototype.slice.call(win.document.querySelectorAll(sel
   check('检查器重绘成新结论',
     $('#inspBody').textContent.indexOf('偏集成，不是从零建设') !== -1);
   check('给出更新提示', $('#inspBody').textContent.indexOf('已更新结论') !== -1);
+  check('重判之后重新拉了轨迹（否则历史里少了刚判的这次）',
+    sentMessages.filter((m) => m.type === 'VERDICT_LOG' && m.key === 'k1').length >= 2,
+    String(sentMessages.filter((m) => m.type === 'VERDICT_LOG' && m.key === 'k1').length));
 
   /* ---------- 5. 旧记录 ---------- */
   console.log('\n=== 旧记录（只有摘要） ===');
@@ -319,6 +350,9 @@ const $$ = (sel) => Array.prototype.slice.call(win.document.querySelectorAll(sel
   check('旧记录的重新判定被禁用', $('#inspRejudge').disabled === true);
   check('旧记录没有判定时说明分数来自词库',
     $('#inspBody').textContent.indexOf('分数来自本地词库') !== -1);
+  check('旧记录从没判过时，历史段说"还没判过"（而不是显示一段空轨迹）',
+    $('#inspBody').textContent.indexOf('还没有用模型判过') !== -1,
+    $('#inspBody .insp-hist') && $('#inspBody .insp-hist').textContent);
 
   console.log('\n结果：通过 ' + pass + ' / 失败 ' + fail);
   process.exit(fail ? 1 : 0);
