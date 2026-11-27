@@ -148,7 +148,181 @@ check('无布局：仍能抽出职位名', f2 && f2.jobTitle === '高级devops�
 check('无布局：仍能抽出公司名', f2 && f2.company === '中电金信', f2 && ('实际 ' + f2.company));
 check('无布局：仍能抽出薪资', f2 && f2.salaryText === '21-22K', f2 && ('实际 ' + f2.salaryText));
 
-/* ---------- 用例 3：诊断报告要能让维护者远程校准 ---------- */
+/* ---------- 用例 3：截图中的选中卡片与详情错位 ----------
+   详情列只有职位和拆分的薪资，没有公司；推荐岗位链接不能被猜成公司。
+   左侧当前卡片与详情标题完全一致，卡片底部给出公司名。 */
+const bugHtml = `
+<div class="wrap" data-box="0,0,2476,1392">
+  <div class="left-col" data-box="0,295,700,1097">
+    <div class="lcard" data-box="39,304,662,240"><span>大模型网关开发工程师</span><span>15-22K</span><span>北京数务通科技</span></div>
+    <div class="lcard" data-box="39,574,662,240"><span>资深后端开发工程师</span><span>18-35K</span><span>广州大娱网络科技</span></div>
+    <div class="lcard" data-box="39,844,662,240"><span>高级java开发工程师</span><span>15-22K</span><span>晟能电子</span></div>
+    <div class="lcard selected" data-box="39,1114,662,240">
+      <div class="position" data-box="82,1146,440,36">资深Java开发工程师（跨境电商）</div>
+      <div class="pay" data-box="543,1146,145,36">18–25K</div>
+      <div class="tags" data-box="82,1215,300,35"><span>5-10年</span><span>本科</span></div>
+      <div class="footer" data-box="82,1283,575,47">
+        <span class="merchant" data-box="140,1305,75,28">衣媚</span>
+        <span data-box="492,1305,165,28">广州·番禺区·南村</span>
+      </div>
+    </div>
+  </div>
+  <div class="right-col" data-box="730,324,1353,1068">
+    <div class="head" data-box="763,347,1280,170">
+      <div class="title-row" data-box="763,347,900,80">
+        <span style="font-size:30px" data-box="763,350,541,54">资深Java开发工程师（跨境电商）</span>
+        <span class="pay-row" data-box="1341,350,170,54"><b>18</b><b>–</b><b>25K</b></span>
+      </div>
+      <div class="requirements" data-box="774,437,500,40"><span>广州</span><span>5-10年</span><span>本科</span></div>
+    </div>
+    <div class="body" data-box="773,510,1280,820">
+      <h3>职位描述</h3><p>${JD_TEXT}</p>
+    </div>
+    <a href="/job_detail/similar.html">广州数字技术专家</a>
+    <a href="/job_detail/another.html">广州数字IC验证工程师</a>
+  </div>
+</div>`;
+
+const bugDom = new JSDOM(bugHtml, {
+  url: 'https://www.zhipin.com/web/geek/jobs?query=Java',
+  pretendToBeVisual: true
+});
+bugDom.window.document.title = 'Java招聘 - BOSS直聘';
+global.document = bugDom.window.document;
+global.location = bugDom.window.location;
+global.getComputedStyle = (el) => bugDom.window.getComputedStyle(el);
+stubLayout(bugDom.window);
+const bug = E.extract(adapter);
+check('截图：职位对应当前卡片', bug && bug.jobTitle === '资深Java开发工程师（跨境电商）', bug && ('实际 ' + bug.jobTitle));
+check('截图：公司取同名卡片的衣媚', bug && bug.company === '衣媚', bug && ('实际 ' + bug.company));
+check('截图：公司来源可见', bug && bug.sources.company === '列表匹配', bug && ('实际 ' + bug.sources.company));
+check('截图：不把推荐岗位误作公司', bug && bug.company !== '广州数字IC验证工程师', bug && ('实际 ' + bug.company));
+check('截图：拆分的薪资取 18-25K', bug && bug.salaryText === '18-25K', bug && ('实际 ' + bug.salaryText));
+check('截图：薪资可供打分规则解析', bug && U.parseSalary(bug.salaryText).max === 25,
+  bug && ('实际 ' + JSON.stringify(U.parseSalary(bug.salaryText))));
+check('截图：原始连接符也能解析', U.parseSalary('18–25K').max === 25);
+bugDom.window.document.querySelector('.pay-row').remove();
+const noDetailSalary = E.extract(adapter);
+check('截图：详情薪资缺失时只从同名卡片补齐', noDetailSalary &&
+  noDetailSalary.salaryText === '18-25K' && noDetailSalary.sources.salary === '列表匹配',
+  noDetailSalary && ('实际 ' + noDetailSalary.salaryText + ' / ' + noDetailSalary.sources.salary));
+bugDom.window.document.querySelector('.merchant').remove();
+const noCardCompany = E.extract(adapter);
+check('截图：无可信公司时不借用推荐岗位', noCardCompany &&
+  noCardCompany.company === '' && noCardCompany.sources.company === '未取到',
+  noCardCompany && ('实际 ' + noCardCompany.company + ' / ' + noCardCompany.sources.company));
+
+/* ---------- 用例 4：站点字体把薪资数字编码成私有区字符 ----------
+   视觉上是 6-7K，DOM 文本却是两个专用字形和 K；薪资字号甚至比标题更大。
+   左侧标题被省略号截断，公司仍应与右侧完整标题关联。 */
+const encodedHtml = `
+<div class="wrap" data-box="0,0,2450,1200">
+  <div class="left" data-box="0,280,705,920">
+    <div class="lcard selected" data-box="43,281,661,239">
+      <div class="position" data-box="85,316,480,40">FDE（前线部署工程师 / AI 交付工…</div>
+      <div class="pay" data-box="580,316,86,40">\uE101-\uE102K</div>
+      <div class="footer" data-box="85,450,570,60"><span class="merchant" data-box="143,468,200,35">百蕴启辰/信息安全</span></div>
+    </div>
+  </div>
+  <div class="right" data-box="735,280,1200,920">
+    <div class="head" data-box="777,310,1050,130">
+      <span style="font-size:28px" data-box="777,317,650,45">FDE（前线部署工程师 / AI 交付工程师）</span>
+      <span class="encoded-pay" style="font-size:32px;font-family:BossCipher" data-box="1460,317,100,45">\uE101-\uE102K</span>
+      <div class="meta" data-box="777,395,430,30"><span>广州</span><span>1-3年</span><span>本科</span></div>
+    </div>
+    <div class="bd" data-box="777,470,1050,700"><h3>职位描述</h3><p>${JD_TEXT}</p></div>
+  </div>
+</div>`;
+const encodedDom = new JSDOM(encodedHtml, {
+  url: 'https://www.zhipin.com/web/geek/jobs?city=101280100&query=FDE',
+  pretendToBeVisual: true
+});
+encodedDom.window.document.title = 'FDE招聘 - BOSS直聘';
+global.document = encodedDom.window.document;
+global.location = encodedDom.window.location;
+global.getComputedStyle = (el) => encodedDom.window.getComputedStyle(el);
+global.innerWidth = 2450;
+stubLayout(encodedDom.window);
+const encoded = E.extract(adapter);
+check('编码薪资：职位仍取完整 FDE 标题', encoded &&
+  encoded.jobTitle === 'FDE（前线部署工程师 / AI 交付工程师）', encoded && ('实际 ' + encoded.jobTitle));
+check('截断卡片：公司与完整标题匹配', encoded && encoded.company === '百蕴启辰/信息安全',
+  encoded && ('实际 ' + encoded.company));
+check('编码薪资：无法解码时不冒充职位或薪资', encoded &&
+  encoded.salaryText === '' && encoded.sources.salary === '未取到',
+  encoded && ('实际 ' + encoded.salaryText + ' / ' + encoded.sources.salary));
+const glyphReport = DG.report(adapter);
+check('编码薪资：诊断含字形编码和字体', glyphReport.includes('U+E101') &&
+  glyphReport.includes('BossCipher'), glyphReport.slice(-800));
+encodedDom.window.document.querySelector('.encoded-pay').setAttribute('data-salary', '6-7K');
+const accessibleSalary = E.extract(adapter);
+check('编码薪资：可访问属性有明文时使用它', accessibleSalary &&
+  accessibleSalary.salaryText === '6-7K' && accessibleSalary.sources.salary === '页面属性',
+  accessibleSalary && ('实际 ' + accessibleSalary.salaryText + ' / ' + accessibleSalary.sources.salary));
+
+/* ---------- 用例 5：真实诊断给出的 BOSS 类名与私有字体编码 ---------- */
+const realShapeHtml = `
+<div class="wrap" data-box="0,0,1600,806">
+  <ul class="job-list" data-box="0,200,590,600">
+    <li class="job-card-box selected" data-box="0,200,590,140">
+      <div class="job-info" data-box="24,210,550,80">
+        <div class="job-title clearfix" data-box="24,215,550,29">
+          <span class="job-name" data-box="24,215,100,28">FDE工程师</span>
+          <span class="job-salary" style="font-family:kanzhun-mix" data-box="500,215,70,28">\uE032\uE031-\uE032\uE032K</span>
+        </div>
+        <div class="tags" data-box="24,260,220,24"><span data-box="48,260,80,24">经验不限</span><span>学历不限</span></div>
+      </div>
+      <div class="footer" data-box="24,295,550,40"><span class="employer" data-box="90,305,180,28">广州羽淼白品牌管理</span></div>
+    </li>
+  </ul>
+  <div class="job-detail-container" data-box="608,200,752,599">
+    <div class="job-detail-box" data-box="608,200,752,718">
+      <div class="job-detail-header" data-box="608,200,752,105">
+        <div class="job-header-info" data-box="632,216,484,65">
+          <div class="job-detail-info" data-box="632,216,476,29">
+            <span class="job-name" data-box="632,216,100,28">FDE工程师</span>
+            <span class="job-salary" style="font-family:kanzhun-mix" data-box="752,216,66,29">\uE032\uE031-\uE032\uE032K</span>
+          </div>
+          <ul class="tag-list"><li>广州</li><li>经验不限</li><li>学历不限</li></ul>
+        </div>
+      </div>
+      <div class="job-detail-body" data-box="608,305,752,613">
+        <h3>职位描述</h3><p>${JD_TEXT}</p>
+        <div class="job-boss-info"><div class="boss-info-attr">广州羽淼白品牌管理 · 联合创始人</div></div>
+      </div>
+    </div>
+  </div>
+</div>`;
+const realShapeDom = new JSDOM(realShapeHtml, {
+  url: 'https://www.zhipin.com/web/geek/jobs?city=101280100&query=FDE',
+  pretendToBeVisual: true
+});
+realShapeDom.window.document.title = '广州招聘 - BOSS直聘';
+global.document = realShapeDom.window.document;
+global.location = realShapeDom.window.location;
+global.getComputedStyle = (el) => realShapeDom.window.getComputedStyle(el);
+stubLayout(realShapeDom.window);
+const realShape = E.extract(adapter);
+check('真实结构：详情标题由页面类名取得', realShape && realShape.jobTitle === 'FDE工程师' &&
+  realShape.sources.jobTitle === '详情区', realShape && ('实际 ' + realShape.jobTitle));
+check('真实结构：私有字体薪资解码成 10-11K', realShape && realShape.salaryText === '10-11K',
+  realShape && ('实际 ' + realShape.salaryText));
+check('真实结构：公司取卡片底部而非经验不限', realShape &&
+  realShape.company === '广州羽淼白品牌管理', realShape && ('实际 ' + realShape.company));
+check('真实结构：经验不限正常提取', realShape && realShape.experienceText === '经验不限',
+  realShape && ('实际 ' + realShape.experienceText));
+realShapeDom.window.document.querySelector('.job-detail-header .job-salary').textContent = '\uE037-\uE038K';
+const shape67 = E.extract(adapter);
+check('真实结构：另一组字形解码 6-7K', shape67 && shape67.salaryText === '6-7K',
+  shape67 && ('实际 ' + shape67.salaryText));
+realShapeDom.window.document.querySelector('.employer').remove();
+const recruiterFallback = E.extract(adapter);
+check('真实结构：卡片缺公司时取招聘者所属公司', recruiterFallback &&
+  recruiterFallback.company === '广州羽淼白品牌管理' &&
+  recruiterFallback.sources.company === '招聘者信息',
+  recruiterFallback && ('实际 ' + recruiterFallback.company + ' / ' + recruiterFallback.sources.company));
+
+/* ---------- 用例 6：诊断报告要能让维护者远程校准 ---------- */
 setup(true);
 const rep = DG.report(adapter);
 

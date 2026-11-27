@@ -15,7 +15,7 @@
     '西宁', '拉萨', '香港', '澳门', '台北'
   ];
 
-  var SALARY_RE = /\d+(?:\.\d+)?\s*[-~至]\s*\d+(?:\.\d+)?\s*(?:[Kk]|千|万)(?:\s*[·・]\s*\d+\s*薪)?/;
+  var SALARY_RE = /\d+(?:\.\d+)?\s*[-~至‐‑‒–—−－]\s*\d+(?:\.\d+)?\s*(?:[Kk]|千|万)(?:\s*[·・]\s*\d+\s*薪)?/;
   var EXP_RE = /(\d+)\s*[-~至]\s*(\d+)\s*年|(\d+)\s*年以上|应届|经验不限|在校/;
   /* 结构推断只认明确年限：JD 正文里常出现「在校」「应届」「经验不限」等描述，
      若用 EXP_RE 去整篇找第一个匹配，会把真实年限覆盖掉。 */
@@ -119,7 +119,7 @@
     var s = raw.replace(/[-_—|]\s*(BOSS\s*直聘|BOSS直聘|猎聘网|猎聘|脉脉|国聘|智联招聘|前程无忧|拉勾).*$/i, '');
 
     var sm = s.match(SALARY_RE);
-    if (sm) out.salary = sm[0];
+    if (sm) out.salary = SalClean(sm[0]);
 
     var em = s.match(EXP_RE);
     if (em) out.experience = em[0];
@@ -324,6 +324,47 @@
     return null;
   }
 
+  /* 薪资可能由几个相邻 span 拼成「18–25K」，此时没有单个叶子节点能命中。
+     只查短容器，并排除 JD 和列表项，避免从职责文字或其他岗位借数字。 */
+  function findSalaryIn(root, jdEl, includeListItem) {
+    if (!root) return '';
+    var nodes = root.querySelectorAll('*');
+    var limit = Math.min(nodes.length, 3000);
+    for (var i = 0; i < limit; i++) {
+      var el = nodes[i];
+      if (jdEl && jdEl.contains && jdEl.contains(el)) continue;
+      if (!includeListItem && looksLikeListItem(el)) continue;
+      var t = U.clean(el.textContent);
+      if (!t || t.length > 48) continue;
+      var salary = SalClean(t);
+      if (salary && SALARY_RE.test(salary)) return salary;
+    }
+    return '';
+  }
+
+  /* 有些薪资节点的可见字形与 DOM 字符不同；先查同节点的可访问标签和数据属性。 */
+  function findSalaryAttribute(root, jdEl) {
+    if (!root) return '';
+    var nodes = root.querySelectorAll('*');
+    var limit = Math.min(nodes.length, 3000);
+    for (var i = 0; i < limit; i++) {
+      var el = nodes[i];
+      if (jdEl && jdEl.contains && jdEl.contains(el)) continue;
+      var cls = typeof el.className === 'string' ? el.className : '';
+      var named = ['data-salary', 'data-pay'];
+      var labels = /salary|pay|wage|薪资|薪酬/i.test(cls)
+        ? ['aria-label', 'title', 'data-value'] : [];
+      var attrs = named.concat(labels);
+      for (var j = 0; j < attrs.length; j++) {
+        var t = el.getAttribute(attrs[j]) || '';
+        if (t.length > 60) continue;
+        var salary = SalClean(t);
+        if (salary && SALARY_RE.test(t)) return salary;
+      }
+    }
+    return '';
+  }
+
   /* ---------- 几何 / 字号推断：完全不依赖类名 ----------
      BOSS 新版 /web/geek/jobs 把类名整体换过一轮，且站点会拦截 F12，
      无法逐个校准选择器。但版式没变：职位名一定是详情列里字号最大的短文本，
@@ -425,8 +466,24 @@
     return best ? sanitizeJobTitle(best.text) : '';
   }
 
-  /* 公司名：工商后缀最可靠；中电金信、某某院 这类没有后缀的，靠「是链接」来认。 */
+  /* 公司名：工商后缀最可靠；没有后缀时只接受明确的公司链接。 */
   var COMPANY_NOISE = /职位描述|岗位职责|任职要求|公司介绍|工商信息|查看全部|相似职位|收藏|举报|分享|微信扫码|立即沟通|继续沟通|投简历|首页|返回/;
+
+  function isCompanyText(t, jobTitle) {
+    if (!t || t.length < 2 || t.length > 40 || t === jobTitle) return false;
+    if (COMPANY_NOISE.test(t) || INDUSTRY_NOISE.test(t)) return false;
+    if (/工程师|产品经理|设计师|招聘|职位|岗位/.test(t)) return false;
+    if (/^(全职|兼职|实习|不限|应届生|在校生)$/.test(t)) return false;
+    if (SALARY_RE.test(t) || EXP_RE.test(t) || EDU_RE.test(t)) return false;
+    if (findCity(t) === t || (findCity(t) && /[·・]/.test(t))) return false;
+    return true;
+  }
+
+  function isCompanyLink(el) {
+    var href = (el.getAttribute && el.getAttribute('href')) || '';
+    var cls = typeof el.className === 'string' ? el.className : '';
+    return /\/(gongsi|company|brand)(\/|\?|$)/i.test(href) || /company|brand|comp-name/i.test(cls);
+  }
 
   function guessCompanyByPane(pane, jdEl, jobTitle) {
     if (!pane) return '';
@@ -439,17 +496,15 @@
       if (el.children.length > 1) continue;
       if (jdEl && jdEl.contains && jdEl.contains(el)) continue;
       if (looksLikeListItem(el)) continue;
+      var link = el.closest && el.closest('a[href]');
+      if (link && /\/job_detail\/|\/job\/[a-z0-9]/i.test(link.getAttribute('href') || '')) continue;
       var t = U.clean(el.textContent);
-      if (!t || t.length < 2 || t.length > 30) continue;
-      if (jobTitle && t === jobTitle) continue;
-      if (COMPANY_NOISE.test(t)) continue;
-      if (INDUSTRY_NOISE.test(t)) continue;
-      if (SALARY_RE.test(t) || EXP_STRICT_RE.test(t) || EDU_RE.test(t)) continue;
+      if (!isCompanyText(t, jobTitle) || t.length > 30) continue;
       if (COMPANY_SUFFIX.test(t)) {
         if (!suffixed) suffixed = t;
         continue;
       }
-      if (el.tagName === 'A' && !firstLink && !findCity(t)) firstLink = t;
+      if (el.tagName === 'A' && isCompanyLink(el) && !firstLink) firstLink = t;
     }
     if (suffixed) return sanitizeCompany(suffixed);
     if (firstLink) return sanitizeCompany(firstLink);
@@ -464,6 +519,10 @@
     if (!t || t.length < 2 || t.length > 40) return false;
     if (TITLE_NOISE.test(t)) return false;
     if (SALARY_RE.test(t) || EXP_RE.test(t)) return false;
+    // BOSS 的薪资有时使用私有区字形：在网页上是数字，移到扩展字体下却成乱码 + K。
+    if (/[\uE000-\uF8FF\uFFFD]/.test(t)) return false;
+    if (!/[\u3400-\u9FFF]{2,}|[A-Za-z]{2,}/.test(t)) return false;
+    if (/^[^\u3400-\u9FFF]{1,8}[Kk](?:[·・]\d+薪)?$/.test(t)) return false;
     return true;
   }
 
@@ -488,11 +547,119 @@
   var INDUSTRY_NOISE = /^(电子商务|互联网|计算机软件|计算机服务|IT服务|人工智能|新能源|咨询服务|贸易|进出口|批发|零售|金融|教育|医疗|游戏|广告|传媒|物流|房地产|信息服务|电子技术)$/;
   var COMPANY_SUFFIX = /有限公司|股份|集团|研究院|事务所|工作室|医院|学校|大学|银行|证券|保险|科技|网络|技术|数字|数据|智能|电子/;
 
-  /* 详情区内的公司名兜底：靠工商后缀识别，比类名稳。
-     「中电金信」这类没有后缀的公司名只能靠「是链接」来认，所以两种线索都收。
+  /* 详情区内的公司名兜底：靠工商后缀或明确的公司链接识别。
      有 pane 时传 pane，没有时传 scope，算法相同。 */
   function guessCompanyIn(scope, jdEl, jobTitle) {
     return guessCompanyByPane(scope, jdEl, jobTitle);
+  }
+
+  function bossRecruiterCompany(scope, jobTitle) {
+    if (!scope) return '';
+    var el = scope.querySelector('.job-boss-info .boss-info-attr');
+    if (!el) return '';
+    var name = U.clean(el.textContent).split(/\s*[·・]\s*/)[0];
+    return isCompanyText(name, jobTitle) ? sanitizeCompany(name) : '';
+  }
+
+  /* BOSS 搜索页的左侧卡片与右侧详情展示同一职位。详情里没有公司时，
+     用完全一致的职位标题关联卡片，再从卡片底部找公司。 */
+  function companyFromCard(card, jobTitle) {
+    var nodes = card.querySelectorAll('*');
+    var limit = Math.min(nodes.length, 120);
+    for (var i = 0; i < limit; i++) {
+      var el = nodes[i];
+      var cls = typeof el.className === 'string' ? el.className : '';
+      if (!/company|brand|merchant|comp-name/i.test(cls) &&
+          !(el.tagName === 'A' && isCompanyLink(el))) continue;
+      var explicit = U.clean(el.textContent);
+      if (isCompanyText(explicit, jobTitle)) return sanitizeCompany(explicit);
+    }
+
+    var box = rectOf(card);
+    if (!box || box.width < 80 || box.height < 60) return '';
+    var best = null;
+    for (var j = 0; j < limit; j++) {
+      var leaf = nodes[j];
+      if (leaf.children.length) continue;
+      var t = U.clean(leaf.textContent);
+      if (!isCompanyText(t, jobTitle)) continue;
+      var r = rectOf(leaf);
+      if (!r || r.width < 1 || r.top < box.top + box.height * 0.55 ||
+          r.left > box.left + box.width * 0.6) continue;
+      if (!best || r.top > best.top || (r.top === best.top && r.left < best.left)) {
+        best = { text: t, top: r.top, left: r.left };
+      }
+    }
+    return best ? sanitizeCompany(best.text) : '';
+  }
+
+  function matchingListCard(jobTitle, scope) {
+    if (!scope || !document.body || !jobTitle) return null;
+    var key = U.squeeze(jobTitle);
+    if (key.length < 4) return null;
+    var nodes = document.body.querySelectorAll('*');
+    var matches = [];
+    var limit = Math.min(nodes.length, 5000);
+    for (var i = 0; i < limit; i++) {
+      var el = nodes[i];
+      if (scope.contains(el) || (el.closest && el.closest('#jr-radar-host'))) continue;
+      if (el.children.length > 1) continue;
+      var raw = el.textContent || '';
+      if (raw.length < 2 || raw.length > 90) continue;
+      var candidateKey = U.squeeze(sanitizeJobTitle(raw).replace(/[…⋯]+$/, ''));
+      var exact = candidateKey === key;
+      var prefix = candidateKey.length >= 10 && candidateKey.length >= key.length * 0.55 &&
+        key.indexOf(candidateKey) === 0;
+      if (!exact && !prefix) continue;
+      var childMatches = false;
+      for (var j = 0; j < el.children.length; j++) {
+        var childKey = U.squeeze(sanitizeJobTitle(el.children[j].textContent).replace(/[…⋯]+$/, ''));
+        if (childKey === candidateKey) childMatches = true;
+      }
+      if (childMatches) continue;
+
+      var knownCard = el.closest && el.closest('li.job-card-box');
+      if (knownCard && !scope.contains(knownCard)) {
+        var knownCompany = companyFromCard(knownCard, jobTitle);
+        if (knownCompany && !matches.some(function (m) { return m.el === knownCard; })) {
+          var knownClass = typeof knownCard.className === 'string' ? knownCard.className : '';
+          matches.push({
+            el: knownCard, company: knownCompany,
+            salary: findSalaryIn(knownCard, null, true) || findSalaryAttribute(knownCard, null),
+            matchScore: exact ? 1000 + candidateKey.length : candidateKey.length,
+            selected: /selected|active|current/i.test(knownClass) ||
+              knownCard.getAttribute('aria-selected') === 'true'
+          });
+        }
+        continue;
+      }
+
+      var cur = el;
+      for (var depth = 0; depth < 7 && cur && cur !== document.body; depth++, cur = cur.parentElement) {
+        if (scope.contains(cur)) break;
+        var whole = U.clean(cur.textContent);
+        if (whole.length > 400) break;
+        var company = companyFromCard(cur, jobTitle);
+        if (!company) continue;
+        var salary = findSalaryIn(cur, null, true) || findSalaryAttribute(cur, null);
+        if (!matches.some(function (m) { return m.el === cur; })) {
+          var cls = typeof cur.className === 'string' ? cur.className : '';
+          matches.push({
+            el: cur, company: company, salary: salary,
+            matchScore: exact ? 1000 + candidateKey.length : candidateKey.length,
+            selected: /selected|active|current/i.test(cls) ||
+              cur.getAttribute('aria-selected') === 'true' ||
+              cur.getAttribute('data-selected') === 'true'
+          });
+        }
+        break;
+      }
+    }
+    if (matches.length === 1) return matches[0];
+    matches.sort(function (a, b) { return b.matchScore - a.matchScore; });
+    if (matches.length > 1 && matches[0].matchScore > matches[1].matchScore) return matches[0];
+    var selected = matches.filter(function (m) { return m.selected; });
+    return selected.length === 1 ? selected[0] : null;
   }
 
   function extract(adapter) {
@@ -540,9 +707,20 @@
     }
     if (!jobTitleSource) jobTitleSource = '未取到';
 
+    var card = adapter.id === 'zhipin' && /\/web\/geek\/jobs?(\/|$)/.test(location.pathname)
+      ? matchingListCard(jobTitle, scope) : null;
+
     var c = pickIn(pageRoot, sel.company);
-    var company = sanitizeCompany(c.text);
+    var company = isCompanyText(U.clean(c.text), jobTitle) ? sanitizeCompany(c.text) : '';
     var companySource = (c.sel && company) ? scopeTag : '';
+    if (!company && card) {
+      company = card.company;
+      companySource = '列表匹配';
+    }
+    if (!company && adapter.id === 'zhipin') {
+      company = bossRecruiterCompany(scope, jobTitle);
+      if (company) companySource = '招聘者信息';
+    }
     if (!company && scope) {
       company = guessCompanyIn(scope, jdEl, jobTitle);
       if (company) companySource = '结构推断';
@@ -559,9 +737,21 @@
     if (!salaryText && scope) {
       var salEl = findLeafText(scope, SALARY_RE, 24, jdEl);
       if (salEl) {
-        salaryText = salEl.text;
+        salaryText = SalClean(salEl.text);
         salarySource = '结构推断';
       }
+    }
+    if (!salaryText && scope) {
+      salaryText = findSalaryIn(scope, jdEl, false);
+      if (salaryText) salarySource = '结构推断';
+    }
+    if (!salaryText && scope) {
+      salaryText = findSalaryAttribute(scope, jdEl);
+      if (salaryText) salarySource = '页面属性';
+    }
+    if (!salaryText && card && card.salary) {
+      salaryText = card.salary;
+      salarySource = '列表匹配';
     }
     if (!salaryText && parsed.salary) {
       salaryText = parsed.salary;
@@ -649,9 +839,16 @@
   }
 
   function SalClean(t) {
-    var s = U.clean(t);
+    var s = U.clean(t).replace(/[‐‑‒–—−－]/g, '-');
+    if (typeof location !== 'undefined' && /(^|\.)zhipin\.com$/i.test(location.hostname || '')) {
+      s = s.replace(/[\uE031-\uE03A]/g, function (c) {
+        return String(c.charCodeAt(0) - 0xE031);
+      });
+    }
     var m = s.match(SALARY_RE);
-    return m ? m[0] : (s.length <= 24 ? s : '');
+    if (m) return m[0];
+    if (/[\uE000-\uF8FF\uFFFD]/.test(s)) return '';
+    return s.length <= 24 ? s : '';
   }
 
   global.JR_EXTRACT = {

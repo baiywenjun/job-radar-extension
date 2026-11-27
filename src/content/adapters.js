@@ -15,6 +15,7 @@
       detailPattern: /\/job_detail\/|job_detail\.html/,
       selectors: {
         jobTitle: [
+          '.job-detail-header .job-detail-info .job-name',
           '.job-banner .name h1',
           '.job-primary .name h1',
           '.job-banner h1',
@@ -30,12 +31,14 @@
           '.company-name'
         ],
         salary: [
+          '.job-detail-header .job-detail-info .job-salary',
           '.job-banner .salary',
           '.job-primary .salary',
           '.job-detail-box .salary',
           '.salary'
         ],
         meta: [
+          '.job-detail-header .tag-list',
           '.job-banner .info-primary p',
           '.job-primary .job-limit',
           '.job-banner .info-primary',

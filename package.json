@@ -1,6 +1,6 @@
 {
   "name": "job-radar",
-  "version": "0.1.0",
+  "version": "0.1.5",
   "private": true,
   "description": "岗位雷达 · JD 结构化记录仪（Chrome MV3 扩展）",
   "scripts": {

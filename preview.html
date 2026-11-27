@@ -4,17 +4,17 @@
 <meta charset="UTF-8">
 <title>岗位雷达 · 面板预览（自包含）</title>
 <style>
-  :root{--ink:#1e2532;--ink2:#4a5568;--ink3:#77839a;--line:#e2e7ef;--soft:#eef1f6;--blue:#20509b}
+  :root{--ink:#38291e;--ink2:#68503b;--ink3:#8b755f;--line:#f1dac1;--soft:#faecdc;--accent:#e86b0a}
   *{box-sizing:border-box}
   html,body{margin:0}
   body{
-    background:#f5f7fa;color:var(--ink);padding:0 400px 40px 0;
+    background:#fffaf5;color:var(--ink);padding:0 400px 40px 0;
     font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
     font-size:14px;line-height:1.65;-webkit-font-smoothing:antialiased;
   }
   .bar{
     display:flex;align-items:center;gap:12px;flex-wrap:wrap;
-    padding:14px 22px;background:#fff;border-bottom:1px solid var(--line);margin-bottom:22px;
+    padding:14px 22px;background:#fff5e9;border-top:4px solid var(--accent);border-bottom:1px solid var(--line);margin-bottom:22px;
     position:sticky;top:0;z-index:5;
   }
   .bar b{font-size:14px}
@@ -24,8 +24,8 @@
     padding:6px 11px;border:1px solid var(--line);border-radius:7px;background:#fff;
     color:var(--ink2);font-size:12.5px;font-family:inherit;cursor:pointer
   }
-  .btns button:hover{border-color:var(--blue);color:var(--blue)}
-  .btns button.on{background:var(--blue);border-color:var(--blue);color:#fff}
+  .btns button:hover{border-color:var(--accent);color:var(--accent)}
+  .btns button.on{background:var(--accent);border-color:var(--accent);color:#fff}
 
   .fake{
     background:#fff;border:1px solid var(--line);border-radius:12px;
@@ -33,16 +33,16 @@
   }
   .fake .job-banner{border-bottom:1px solid var(--soft);padding-bottom:14px;margin-bottom:16px}
   .fake .name h1{font-size:21px;margin:0 0 6px;font-weight:700;letter-spacing:.2px}
-  .fake .salary{color:#fe574a;font-size:19px;font-weight:700;margin-bottom:8px}
+  .fake .salary{color:var(--accent);font-size:19px;font-weight:700;margin-bottom:8px}
   .fake .info-primary p{margin:0;color:var(--ink3);font-size:13px}
   .fake .company-info{margin-top:10px}
-  .fake .company-info a.company-name{color:var(--blue);text-decoration:none;font-size:13.5px;font-weight:600}
+  .fake .company-info a.company-name{color:var(--accent);text-decoration:none;font-size:13.5px;font-weight:600}
   .fake .job-boss-info{margin:14px 0;color:var(--ink3);font-size:12.5px}
   .fake .job-sec-text{color:var(--ink2);font-size:13.5px;white-space:pre-line}
   .fake .job-sec-text strong{color:var(--ink)}
   .tip{
-    max-width:700px;margin:18px auto 0;padding:12px 15px;background:#e9f0fc;
-    border-left:3px solid var(--blue);border-radius:0 7px 7px 0;color:#33465e;font-size:12.5px;line-height:1.7;
+    max-width:700px;margin:18px auto 0;padding:12px 15px;background:#fff0df;
+    border-left:3px solid var(--accent);border-radius:0 7px 7px 0;color:#68503b;font-size:12.5px;line-height:1.7;
   }
 </style>
 </head>
@@ -162,13 +162,14 @@
     var raw = clean(text);
     var out = { min: null, max: null, unit: '', raw: raw };
     if (!raw) return out;
+    var normalized = raw.replace(/[‐‑‒–—−－]/g, '-');
 
     if (/面议|待定/.test(raw)) {
       out.unit = '面议';
       return out;
     }
 
-    var m = raw.match(/(\d+(?:\.\d+)?)\s*[-~至]\s*(\d+(?:\.\d+)?)\s*(k|K|千|万)/);
+    var m = normalized.match(/(\d+(?:\.\d+)?)\s*[-~至]\s*(\d+(?:\.\d+)?)\s*(k|K|千|万)/);
     if (m) {
       var a = parseFloat(m[1]);
       var b = parseFloat(m[2]);
@@ -185,7 +186,7 @@
       return out;
     }
 
-    m = raw.match(/(\d+(?:\.\d+)?)\s*(k|K|千)\s*(?:以上|\+)?/);
+    m = normalized.match(/(\d+(?:\.\d+)?)\s*(k|K|千)\s*(?:以上|\+)?/);
     if (m) {
       out.min = parseFloat(m[1]);
       out.max = parseFloat(m[1]);
@@ -193,7 +194,7 @@
       return out;
     }
 
-    m = raw.match(/(\d{4,6})\s*[-~至]\s*(\d{4,6})\s*元?/);
+    m = normalized.match(/(\d{4,6})\s*[-~至]\s*(\d{4,6})\s*元?/);
     if (m) {
       out.min = Math.round(parseFloat(m[1]) / 1000);
       out.max = Math.round(parseFloat(m[2]) / 1000);
@@ -712,6 +713,7 @@
       detailPattern: /\/job_detail\/|job_detail\.html/,
       selectors: {
         jobTitle: [
+          '.job-detail-header .job-detail-info .job-name',
           '.job-banner .name h1',
           '.job-primary .name h1',
           '.job-banner h1',
@@ -727,12 +729,14 @@
           '.company-name'
         ],
         salary: [
+          '.job-detail-header .job-detail-info .job-salary',
           '.job-banner .salary',
           '.job-primary .salary',
           '.job-detail-box .salary',
           '.salary'
         ],
         meta: [
+          '.job-detail-header .tag-list',
           '.job-banner .info-primary p',
           '.job-primary .job-limit',
           '.job-banner .info-primary',
@@ -947,7 +951,7 @@
     '西宁', '拉萨', '香港', '澳门', '台北'
   ];
 
-  var SALARY_RE = /\d+(?:\.\d+)?\s*[-~至]\s*\d+(?:\.\d+)?\s*(?:[Kk]|千|万)(?:\s*[·・]\s*\d+\s*薪)?/;
+  var SALARY_RE = /\d+(?:\.\d+)?\s*[-~至‐‑‒–—−－]\s*\d+(?:\.\d+)?\s*(?:[Kk]|千|万)(?:\s*[·・]\s*\d+\s*薪)?/;
   var EXP_RE = /(\d+)\s*[-~至]\s*(\d+)\s*年|(\d+)\s*年以上|应届|经验不限|在校/;
   /* 结构推断只认明确年限：JD 正文里常出现「在校」「应届」「经验不限」等描述，
      若用 EXP_RE 去整篇找第一个匹配，会把真实年限覆盖掉。 */
@@ -1051,7 +1055,7 @@
     var s = raw.replace(/[-_—|]\s*(BOSS\s*直聘|BOSS直聘|猎聘网|猎聘|脉脉|国聘|智联招聘|前程无忧|拉勾).*$/i, '');
 
     var sm = s.match(SALARY_RE);
-    if (sm) out.salary = sm[0];
+    if (sm) out.salary = SalClean(sm[0]);
 
     var em = s.match(EXP_RE);
     if (em) out.experience = em[0];
@@ -1256,6 +1260,47 @@
     return null;
   }
 
+  /* 薪资可能由几个相邻 span 拼成「18–25K」，此时没有单个叶子节点能命中。
+     只查短容器，并排除 JD 和列表项，避免从职责文字或其他岗位借数字。 */
+  function findSalaryIn(root, jdEl, includeListItem) {
+    if (!root) return '';
+    var nodes = root.querySelectorAll('*');
+    var limit = Math.min(nodes.length, 3000);
+    for (var i = 0; i < limit; i++) {
+      var el = nodes[i];
+      if (jdEl && jdEl.contains && jdEl.contains(el)) continue;
+      if (!includeListItem && looksLikeListItem(el)) continue;
+      var t = U.clean(el.textContent);
+      if (!t || t.length > 48) continue;
+      var salary = SalClean(t);
+      if (salary && SALARY_RE.test(salary)) return salary;
+    }
+    return '';
+  }
+
+  /* 有些薪资节点的可见字形与 DOM 字符不同；先查同节点的可访问标签和数据属性。 */
+  function findSalaryAttribute(root, jdEl) {
+    if (!root) return '';
+    var nodes = root.querySelectorAll('*');
+    var limit = Math.min(nodes.length, 3000);
+    for (var i = 0; i < limit; i++) {
+      var el = nodes[i];
+      if (jdEl && jdEl.contains && jdEl.contains(el)) continue;
+      var cls = typeof el.className === 'string' ? el.className : '';
+      var named = ['data-salary', 'data-pay'];
+      var labels = /salary|pay|wage|薪资|薪酬/i.test(cls)
+        ? ['aria-label', 'title', 'data-value'] : [];
+      var attrs = named.concat(labels);
+      for (var j = 0; j < attrs.length; j++) {
+        var t = el.getAttribute(attrs[j]) || '';
+        if (t.length > 60) continue;
+        var salary = SalClean(t);
+        if (salary && SALARY_RE.test(t)) return salary;
+      }
+    }
+    return '';
+  }
+
   /* ---------- 几何 / 字号推断：完全不依赖类名 ----------
      BOSS 新版 /web/geek/jobs 把类名整体换过一轮，且站点会拦截 F12，
      无法逐个校准选择器。但版式没变：职位名一定是详情列里字号最大的短文本，
@@ -1357,8 +1402,24 @@
     return best ? sanitizeJobTitle(best.text) : '';
   }
 
-  /* 公司名：工商后缀最可靠；中电金信、某某院 这类没有后缀的，靠「是链接」来认。 */
+  /* 公司名：工商后缀最可靠；没有后缀时只接受明确的公司链接。 */
   var COMPANY_NOISE = /职位描述|岗位职责|任职要求|公司介绍|工商信息|查看全部|相似职位|收藏|举报|分享|微信扫码|立即沟通|继续沟通|投简历|首页|返回/;
+
+  function isCompanyText(t, jobTitle) {
+    if (!t || t.length < 2 || t.length > 40 || t === jobTitle) return false;
+    if (COMPANY_NOISE.test(t) || INDUSTRY_NOISE.test(t)) return false;
+    if (/工程师|产品经理|设计师|招聘|职位|岗位/.test(t)) return false;
+    if (/^(全职|兼职|实习|不限|应届生|在校生)$/.test(t)) return false;
+    if (SALARY_RE.test(t) || EXP_RE.test(t) || EDU_RE.test(t)) return false;
+    if (findCity(t) === t || (findCity(t) && /[·・]/.test(t))) return false;
+    return true;
+  }
+
+  function isCompanyLink(el) {
+    var href = (el.getAttribute && el.getAttribute('href')) || '';
+    var cls = typeof el.className === 'string' ? el.className : '';
+    return /\/(gongsi|company|brand)(\/|\?|$)/i.test(href) || /company|brand|comp-name/i.test(cls);
+  }
 
   function guessCompanyByPane(pane, jdEl, jobTitle) {
     if (!pane) return '';
@@ -1371,17 +1432,15 @@
       if (el.children.length > 1) continue;
       if (jdEl && jdEl.contains && jdEl.contains(el)) continue;
       if (looksLikeListItem(el)) continue;
+      var link = el.closest && el.closest('a[href]');
+      if (link && /\/job_detail\/|\/job\/[a-z0-9]/i.test(link.getAttribute('href') || '')) continue;
       var t = U.clean(el.textContent);
-      if (!t || t.length < 2 || t.length > 30) continue;
-      if (jobTitle && t === jobTitle) continue;
-      if (COMPANY_NOISE.test(t)) continue;
-      if (INDUSTRY_NOISE.test(t)) continue;
-      if (SALARY_RE.test(t) || EXP_STRICT_RE.test(t) || EDU_RE.test(t)) continue;
+      if (!isCompanyText(t, jobTitle) || t.length > 30) continue;
       if (COMPANY_SUFFIX.test(t)) {
         if (!suffixed) suffixed = t;
         continue;
       }
-      if (el.tagName === 'A' && !firstLink && !findCity(t)) firstLink = t;
+      if (el.tagName === 'A' && isCompanyLink(el) && !firstLink) firstLink = t;
     }
     if (suffixed) return sanitizeCompany(suffixed);
     if (firstLink) return sanitizeCompany(firstLink);
@@ -1396,6 +1455,10 @@
     if (!t || t.length < 2 || t.length > 40) return false;
     if (TITLE_NOISE.test(t)) return false;
     if (SALARY_RE.test(t) || EXP_RE.test(t)) return false;
+    // BOSS 的薪资有时使用私有区字形：在网页上是数字，移到扩展字体下却成乱码 + K。
+    if (/[\uE000-\uF8FF\uFFFD]/.test(t)) return false;
+    if (!/[\u3400-\u9FFF]{2,}|[A-Za-z]{2,}/.test(t)) return false;
+    if (/^[^\u3400-\u9FFF]{1,8}[Kk](?:[·・]\d+薪)?$/.test(t)) return false;
     return true;
   }
 
@@ -1420,11 +1483,119 @@
   var INDUSTRY_NOISE = /^(电子商务|互联网|计算机软件|计算机服务|IT服务|人工智能|新能源|咨询服务|贸易|进出口|批发|零售|金融|教育|医疗|游戏|广告|传媒|物流|房地产|信息服务|电子技术)$/;
   var COMPANY_SUFFIX = /有限公司|股份|集团|研究院|事务所|工作室|医院|学校|大学|银行|证券|保险|科技|网络|技术|数字|数据|智能|电子/;
 
-  /* 详情区内的公司名兜底：靠工商后缀识别，比类名稳。
-     「中电金信」这类没有后缀的公司名只能靠「是链接」来认，所以两种线索都收。
+  /* 详情区内的公司名兜底：靠工商后缀或明确的公司链接识别。
      有 pane 时传 pane，没有时传 scope，算法相同。 */
   function guessCompanyIn(scope, jdEl, jobTitle) {
     return guessCompanyByPane(scope, jdEl, jobTitle);
+  }
+
+  function bossRecruiterCompany(scope, jobTitle) {
+    if (!scope) return '';
+    var el = scope.querySelector('.job-boss-info .boss-info-attr');
+    if (!el) return '';
+    var name = U.clean(el.textContent).split(/\s*[·・]\s*/)[0];
+    return isCompanyText(name, jobTitle) ? sanitizeCompany(name) : '';
+  }
+
+  /* BOSS 搜索页的左侧卡片与右侧详情展示同一职位。详情里没有公司时，
+     用完全一致的职位标题关联卡片，再从卡片底部找公司。 */
+  function companyFromCard(card, jobTitle) {
+    var nodes = card.querySelectorAll('*');
+    var limit = Math.min(nodes.length, 120);
+    for (var i = 0; i < limit; i++) {
+      var el = nodes[i];
+      var cls = typeof el.className === 'string' ? el.className : '';
+      if (!/company|brand|merchant|comp-name/i.test(cls) &&
+          !(el.tagName === 'A' && isCompanyLink(el))) continue;
+      var explicit = U.clean(el.textContent);
+      if (isCompanyText(explicit, jobTitle)) return sanitizeCompany(explicit);
+    }
+
+    var box = rectOf(card);
+    if (!box || box.width < 80 || box.height < 60) return '';
+    var best = null;
+    for (var j = 0; j < limit; j++) {
+      var leaf = nodes[j];
+      if (leaf.children.length) continue;
+      var t = U.clean(leaf.textContent);
+      if (!isCompanyText(t, jobTitle)) continue;
+      var r = rectOf(leaf);
+      if (!r || r.width < 1 || r.top < box.top + box.height * 0.55 ||
+          r.left > box.left + box.width * 0.6) continue;
+      if (!best || r.top > best.top || (r.top === best.top && r.left < best.left)) {
+        best = { text: t, top: r.top, left: r.left };
+      }
+    }
+    return best ? sanitizeCompany(best.text) : '';
+  }
+
+  function matchingListCard(jobTitle, scope) {
+    if (!scope || !document.body || !jobTitle) return null;
+    var key = U.squeeze(jobTitle);
+    if (key.length < 4) return null;
+    var nodes = document.body.querySelectorAll('*');
+    var matches = [];
+    var limit = Math.min(nodes.length, 5000);
+    for (var i = 0; i < limit; i++) {
+      var el = nodes[i];
+      if (scope.contains(el) || (el.closest && el.closest('#jr-radar-host'))) continue;
+      if (el.children.length > 1) continue;
+      var raw = el.textContent || '';
+      if (raw.length < 2 || raw.length > 90) continue;
+      var candidateKey = U.squeeze(sanitizeJobTitle(raw).replace(/[…⋯]+$/, ''));
+      var exact = candidateKey === key;
+      var prefix = candidateKey.length >= 10 && candidateKey.length >= key.length * 0.55 &&
+        key.indexOf(candidateKey) === 0;
+      if (!exact && !prefix) continue;
+      var childMatches = false;
+      for (var j = 0; j < el.children.length; j++) {
+        var childKey = U.squeeze(sanitizeJobTitle(el.children[j].textContent).replace(/[…⋯]+$/, ''));
+        if (childKey === candidateKey) childMatches = true;
+      }
+      if (childMatches) continue;
+
+      var knownCard = el.closest && el.closest('li.job-card-box');
+      if (knownCard && !scope.contains(knownCard)) {
+        var knownCompany = companyFromCard(knownCard, jobTitle);
+        if (knownCompany && !matches.some(function (m) { return m.el === knownCard; })) {
+          var knownClass = typeof knownCard.className === 'string' ? knownCard.className : '';
+          matches.push({
+            el: knownCard, company: knownCompany,
+            salary: findSalaryIn(knownCard, null, true) || findSalaryAttribute(knownCard, null),
+            matchScore: exact ? 1000 + candidateKey.length : candidateKey.length,
+            selected: /selected|active|current/i.test(knownClass) ||
+              knownCard.getAttribute('aria-selected') === 'true'
+          });
+        }
+        continue;
+      }
+
+      var cur = el;
+      for (var depth = 0; depth < 7 && cur && cur !== document.body; depth++, cur = cur.parentElement) {
+        if (scope.contains(cur)) break;
+        var whole = U.clean(cur.textContent);
+        if (whole.length > 400) break;
+        var company = companyFromCard(cur, jobTitle);
+        if (!company) continue;
+        var salary = findSalaryIn(cur, null, true) || findSalaryAttribute(cur, null);
+        if (!matches.some(function (m) { return m.el === cur; })) {
+          var cls = typeof cur.className === 'string' ? cur.className : '';
+          matches.push({
+            el: cur, company: company, salary: salary,
+            matchScore: exact ? 1000 + candidateKey.length : candidateKey.length,
+            selected: /selected|active|current/i.test(cls) ||
+              cur.getAttribute('aria-selected') === 'true' ||
+              cur.getAttribute('data-selected') === 'true'
+          });
+        }
+        break;
+      }
+    }
+    if (matches.length === 1) return matches[0];
+    matches.sort(function (a, b) { return b.matchScore - a.matchScore; });
+    if (matches.length > 1 && matches[0].matchScore > matches[1].matchScore) return matches[0];
+    var selected = matches.filter(function (m) { return m.selected; });
+    return selected.length === 1 ? selected[0] : null;
   }
 
   function extract(adapter) {
@@ -1472,9 +1643,20 @@
     }
     if (!jobTitleSource) jobTitleSource = '未取到';
 
+    var card = adapter.id === 'zhipin' && /\/web\/geek\/jobs?(\/|$)/.test(location.pathname)
+      ? matchingListCard(jobTitle, scope) : null;
+
     var c = pickIn(pageRoot, sel.company);
-    var company = sanitizeCompany(c.text);
+    var company = isCompanyText(U.clean(c.text), jobTitle) ? sanitizeCompany(c.text) : '';
     var companySource = (c.sel && company) ? scopeTag : '';
+    if (!company && card) {
+      company = card.company;
+      companySource = '列表匹配';
+    }
+    if (!company && adapter.id === 'zhipin') {
+      company = bossRecruiterCompany(scope, jobTitle);
+      if (company) companySource = '招聘者信息';
+    }
     if (!company && scope) {
       company = guessCompanyIn(scope, jdEl, jobTitle);
       if (company) companySource = '结构推断';
@@ -1491,9 +1673,21 @@
     if (!salaryText && scope) {
       var salEl = findLeafText(scope, SALARY_RE, 24, jdEl);
       if (salEl) {
-        salaryText = salEl.text;
+        salaryText = SalClean(salEl.text);
         salarySource = '结构推断';
       }
+    }
+    if (!salaryText && scope) {
+      salaryText = findSalaryIn(scope, jdEl, false);
+      if (salaryText) salarySource = '结构推断';
+    }
+    if (!salaryText && scope) {
+      salaryText = findSalaryAttribute(scope, jdEl);
+      if (salaryText) salarySource = '页面属性';
+    }
+    if (!salaryText && card && card.salary) {
+      salaryText = card.salary;
+      salarySource = '列表匹配';
     }
     if (!salaryText && parsed.salary) {
       salaryText = parsed.salary;
@@ -1581,9 +1775,16 @@
   }
 
   function SalClean(t) {
-    var s = U.clean(t);
+    var s = U.clean(t).replace(/[‐‑‒–—−－]/g, '-');
+    if (typeof location !== 'undefined' && /(^|\.)zhipin\.com$/i.test(location.hostname || '')) {
+      s = s.replace(/[\uE031-\uE03A]/g, function (c) {
+        return String(c.charCodeAt(0) - 0xE031);
+      });
+    }
     var m = s.match(SALARY_RE);
-    return m ? m[0] : (s.length <= 24 ? s : '');
+    if (m) return m[0];
+    if (/[\uE000-\uF8FF\uFFFD]/.test(s)) return '';
+    return s.length <= 24 ? s : '';
   }
 
   global.JR_EXTRACT = {
@@ -1615,35 +1816,36 @@
 :host{all:initial}
 *{box-sizing:border-box}
 .jr-panel{
-  --ink:#1e2532;--ink2:#4a5568;--ink3:#77839a;--line:#e2e7ef;--soft:#eef1f6;
+  --ink:#38291e;--ink2:#68503b;--ink3:#8b755f;--line:#f1dac1;--soft:#faecdc;
   --good:#1c7a4c;--goodbg:#eaf6ee;--goodline:#c6e6d2;
   --bad:#a3362f;--badbg:#fcecea;--badline:#f0cdc8;
-  --blue:#20509b;--bluebg:#e9f0fc;--blueline:#c9d9f2;
+  --accent:#e86b0a;--accentbg:#fff0df;--accentline:#ffc88c;
   --warn:#8a5a12;--warnbg:#fdf3e2;--warnline:#eeddb8;
   font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
   font-size:13px;line-height:1.55;color:var(--ink);
   width:344px;max-height:calc(100vh - 96px);
   display:flex;flex-direction:column;
-  background:#fff;border:1px solid var(--line);border-radius:12px;
-  box-shadow:0 8px 32px rgba(16,24,40,.14),0 2px 6px rgba(16,24,40,.06);
+  background:#fff;border:1px solid #edb36f;border-top:4px solid var(--accent);border-radius:12px;
+  box-shadow:0 8px 32px rgba(112,55,9,.18),0 2px 6px rgba(112,55,9,.08);
   overflow:hidden;
 }
-.jr-head{display:flex;align-items:center;gap:8px;padding:11px 13px;border-bottom:1px solid var(--soft);flex:0 0 auto}
-.jr-brand{display:flex;align-items:center;gap:7px;font-weight:700;font-size:13px;letter-spacing:.2px}
-.jr-busy{font-size:10.5px;color:var(--blue);background:var(--bluebg);border:1px solid var(--blueline);
-  padding:1px 6px;border-radius:10px;white-space:nowrap}
-.jr-dot{width:7px;height:7px;border-radius:50%;background:var(--blue);box-shadow:0 0 0 3px var(--bluebg)}
+.jr-head{display:flex;align-items:center;gap:8px;padding:10px 13px;background:linear-gradient(90deg,#fff2e3,#fffaf5);border-bottom:1px solid var(--line);flex:0 0 auto}
+.jr-brand{display:flex;align-items:center;gap:7px;font-weight:700;font-size:13px;letter-spacing:.2px;color:#ab4600;white-space:nowrap}
+.jr-version{font-size:10px;font-weight:700;letter-spacing:0;color:#a34400;background:#ffe2bd;border:1px solid #f9b56d;border-radius:999px;padding:1px 6px}
+.jr-busy{font-size:10.5px;color:var(--accent);background:var(--accentbg);border:1px solid var(--accentline);
+  padding:1px 6px;border-radius:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:80px}
+.jr-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px var(--accentbg)}
 .jr-head .jr-spacer{flex:1}
 .jr-icon{border:1px solid var(--line);background:#fff;color:var(--ink3);width:24px;height:24px;
   border-radius:6px;cursor:pointer;font-size:13px;line-height:1;display:grid;place-items:center;padding:0}
-.jr-icon:hover{border-color:var(--blue);color:var(--blue)}
-.jr-body{overflow-y:auto;padding:13px;flex:1 1 auto}
+.jr-icon:hover{border-color:var(--accent);color:var(--accent)}
+.jr-body{overflow-y:auto;padding:13px;flex:1 1 auto;background:#fffdfb}
 .jr-body::-webkit-scrollbar{width:7px}
-.jr-body::-webkit-scrollbar-thumb{background:#d6dce6;border-radius:4px}
+.jr-body::-webkit-scrollbar-thumb{background:#edc79f;border-radius:4px}
 
 .jr-score{display:flex;align-items:center;gap:13px;margin-bottom:11px}
 .jr-ring{position:relative;width:64px;height:64px;border-radius:50%;flex:0 0 64px;
-  background:conic-gradient(var(--c) calc(var(--p)*1%),#e7ecf3 0);display:grid;place-items:center}
+  background:conic-gradient(var(--c) calc(var(--p)*1%),#f6e7d6 0);display:grid;place-items:center}
 .jr-ring::before{content:"";position:absolute;inset:6px;background:#fff;border-radius:50%}
 .jr-ring b{position:relative;font-size:19px;font-weight:700;color:var(--c);font-variant-numeric:tabular-nums}
 .jr-grade{font-size:15px;font-weight:700;margin-bottom:2px}
@@ -1651,14 +1853,15 @@
 
 .jr-tags{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:12px}
 .jr-tag{font-size:11px;padding:2px 7px;border-radius:5px;border:1px solid var(--line);
-  background:#f7f9fc;color:var(--ink2);white-space:nowrap}
+  background:#fff8ef;color:var(--ink2);white-space:nowrap}
 .jr-tag.g{background:var(--goodbg);border-color:var(--goodline);color:var(--good)}
 .jr-tag.b{background:var(--badbg);border-color:var(--badline);color:var(--bad)}
 .jr-tag.w{background:var(--warnbg);border-color:var(--warnline);color:var(--warn)}
-.jr-tag.n{background:var(--bluebg);border-color:var(--blueline);color:var(--blue)}
+.jr-tag.n{background:var(--accentbg);border-color:var(--accentline);color:var(--accent)}
 
 .jr-fields{border:1px solid var(--soft);border-radius:8px;overflow:hidden;margin-bottom:12px}
 .jr-f{display:flex;gap:8px;padding:6px 9px;border-bottom:1px solid var(--soft);align-items:baseline}
+.jr-f:nth-child(even){background:#fffaf4}
 .jr-f:last-child{border-bottom:none}
 .jr-f .k{flex:0 0 46px;color:var(--ink3);font-size:11px}
 .jr-f .v{flex:1;min-width:0;font-size:12px;word-break:break-word}
@@ -1671,27 +1874,27 @@
 .jr-sec h4{margin:0 0 5px;font-size:11.5px;color:var(--ink3);font-weight:600;letter-spacing:.2px}
 .jr-chips{display:flex;flex-wrap:wrap;gap:4px}
 .jr-chip{font-size:11px;padding:2px 6px;border-radius:4px;border:1px solid var(--line);
-  background:#f8fafc;color:var(--ink2);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  background:#fff8ef;color:var(--ink2);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .jr-chip.g{background:var(--goodbg);border-color:var(--goodline);color:var(--good)}
-.jr-chip.n{background:var(--bluebg);border-color:var(--blueline);color:var(--blue)}
+.jr-chip.n{background:var(--accentbg);border-color:var(--accentline);color:var(--accent)}
 .jr-chip.b{background:var(--badbg);border-color:var(--badline);color:var(--bad)}
 .jr-empty{font-size:11.5px;color:#aab3c2}
 
-.jr-note{font-size:11px;color:var(--ink3);background:#f7f9fc;border:1px solid var(--soft);
+.jr-note{font-size:11px;color:var(--ink3);background:#fff8ef;border:1px solid var(--soft);
   border-radius:6px;padding:7px 9px;margin-bottom:11px;line-height:1.5}
 .jr-note b{color:var(--ink2)}
 .jr-note.warn{background:var(--warnbg);border-color:var(--warnline);color:var(--warn)}
 .jr-note.bad{background:var(--badbg);border-color:var(--badline);color:var(--bad)}
 
-.jr-foot{display:flex;gap:7px;padding:11px 13px;border-top:1px solid var(--soft);background:#fbfcfe;flex:0 0 auto}
+.jr-foot{display:flex;gap:7px;padding:11px 13px;border-top:1px solid var(--soft);background:#fff6eb;flex:0 0 auto}
 .jr-btn{flex:1;padding:8px 10px;border-radius:7px;border:1px solid var(--line);background:#fff;
   color:var(--ink2);font-size:12.5px;font-family:inherit;cursor:pointer;white-space:nowrap;transition:.12s}
-.jr-btn:hover{border-color:var(--blue);color:var(--blue)}
-.jr-btn.primary{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:600}
-.jr-btn.primary:hover{background:#183f7d;color:#fff}
+.jr-btn:hover{border-color:var(--accent);color:var(--accent)}
+.jr-btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.jr-btn.primary:hover{background:#bb5200;color:#fff}
 .jr-btn:disabled{opacity:.65;cursor:default}
 .jr-btn.done{background:var(--goodbg);border-color:var(--goodline);color:var(--good);font-weight:600}
-.jr-mini{font-size:11px;color:var(--ink3);padding:0 13px 10px;background:#fbfcfe}
+.jr-mini{font-size:11px;color:var(--ink3);padding:0 13px 10px;background:#fff6eb}
 
 .jr-panel.collapsed{max-height:none}
 .jr-panel.collapsed .jr-body,.jr-panel.collapsed .jr-foot,.jr-panel.collapsed .jr-mini{display:none}
@@ -1785,7 +1988,7 @@
     root.innerHTML =
       '<div class="jr-panel">' +
       '<div class="jr-head">' +
-      '<div class="jr-brand"><span class="jr-dot"></span>岗位雷达</div>' +
+      '<div class="jr-brand"><span class="jr-dot"></span>岗位雷达<span class="jr-version">白橙版 v0.1.5</span></div>' +
       '<div class="jr-spacer"></div>' +
       '<button class="jr-icon" data-act="re-extract" title="重新抽取">↻</button>' +
       '<button class="jr-icon" data-act="dismiss" title="关闭">×</button>' +
@@ -1803,7 +2006,7 @@
   function gradeColor(grade) {
     switch (grade) {
       case 'strong': return '#1c7a4c';
-      case 'neutral': return '#20509b';
+      case 'neutral': return '#e86b0a';
       case 'weak': return '#8a5a12';
       case 'poor': return '#a3362f';
       default: return '#77839a';
@@ -1886,7 +2089,7 @@
     root.innerHTML =
       '<div class="jr-panel' + (collapsed ? ' collapsed' : '') + '">' +
       '<div class="jr-head">' +
-      '<div class="jr-brand"><span class="jr-dot"></span>岗位雷达</div>' +
+      '<div class="jr-brand"><span class="jr-dot"></span>岗位雷达<span class="jr-version">白橙版 v0.1.5</span></div>' +
       (busyText ? '<span class="jr-busy">' + esc(busyText) + '</span>' : '') +
       '<div class="jr-spacer"></div>' +
       '<button class="jr-icon" data-act="re-extract" title="重新抽取">↻</button>' +
@@ -1916,6 +2119,7 @@
       '<div class="jr-foot">' +
       '<button class="jr-btn ' + (d.saved ? 'done' : 'primary') + '" data-act="save">' + esc(savedLabel) + '</button>' +
       '<button class="jr-btn" data-act="copy">复制摘要</button>' +
+      '<button class="jr-btn" data-act="diag">复制诊断</button>' +
       '</div>' +
       '<div class="jr-mini">JD 来源：' + esc(src.jd || '未取到') + ' · 共 ' + ev.jdLength + ' 字 · 仅个人使用，不采集他人信息</div>' +
       '</div>';

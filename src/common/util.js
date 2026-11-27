@@ -80,13 +80,14 @@
     var raw = clean(text);
     var out = { min: null, max: null, unit: '', raw: raw };
     if (!raw) return out;
+    var normalized = raw.replace(/[‐‑‒–—−－]/g, '-');
 
     if (/面议|待定/.test(raw)) {
       out.unit = '面议';
       return out;
     }
 
-    var m = raw.match(/(\d+(?:\.\d+)?)\s*[-~至]\s*(\d+(?:\.\d+)?)\s*(k|K|千|万)/);
+    var m = normalized.match(/(\d+(?:\.\d+)?)\s*[-~至]\s*(\d+(?:\.\d+)?)\s*(k|K|千|万)/);
     if (m) {
       var a = parseFloat(m[1]);
       var b = parseFloat(m[2]);
@@ -103,7 +104,7 @@
       return out;
     }
 
-    m = raw.match(/(\d+(?:\.\d+)?)\s*(k|K|千)\s*(?:以上|\+)?/);
+    m = normalized.match(/(\d+(?:\.\d+)?)\s*(k|K|千)\s*(?:以上|\+)?/);
     if (m) {
       out.min = parseFloat(m[1]);
       out.max = parseFloat(m[1]);
@@ -111,7 +112,7 @@
       return out;
     }
 
-    m = raw.match(/(\d{4,6})\s*[-~至]\s*(\d{4,6})\s*元?/);
+    m = normalized.match(/(\d{4,6})\s*[-~至]\s*(\d{4,6})\s*元?/);
     if (m) {
       out.min = Math.round(parseFloat(m[1]) / 1000);
       out.max = Math.round(parseFloat(m[2]) / 1000);

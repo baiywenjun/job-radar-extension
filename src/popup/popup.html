@@ -5,26 +5,27 @@
 <title>岗位雷达 · 本地岗位库</title>
 <style>
   :root{
-    --ink:#1e2532;--ink2:#4a5568;--ink3:#77839a;--line:#e2e7ef;--soft:#eef1f6;
+    --ink:#38291e;--ink2:#68503b;--ink3:#8b755f;--line:#f1dac1;--soft:#faecdc;
     --good:#1c7a4c;--goodbg:#eaf6ee;--goodline:#c6e6d2;
     --bad:#a3362f;--badbg:#fcecea;--badline:#f0cdc8;
-    --blue:#20509b;--bluebg:#e9f0fc;--blueline:#c9d9f2;
+    --accent:#e86b0a;--accentbg:#fff0df;--accentline:#ffc88c;
     --warn:#8a5a12;--warnbg:#fdf3e2;--warnline:#eeddb8;
   }
   *{box-sizing:border-box}
   html,body{margin:0}
   body{
     width:800px;height:600px;display:flex;flex-direction:column;
-    background:#f5f7fa;color:var(--ink);
+    background:#fffaf5;color:var(--ink);
     font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
     font-size:13px;line-height:1.55;-webkit-font-smoothing:antialiased;
   }
-  header{display:flex;align-items:center;gap:10px;padding:13px 16px 11px;background:#fff;border-bottom:1px solid var(--line);flex:0 0 auto}
-  .brand{display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px;letter-spacing:.2px}
-  .dot{width:8px;height:8px;border-radius:50%;background:var(--blue);box-shadow:0 0 0 3px var(--bluebg)}
+  header{display:flex;align-items:center;gap:10px;padding:13px 16px 11px;background:linear-gradient(90deg,#fff0df,#fffaf5);border-top:4px solid var(--accent);border-bottom:1px solid var(--line);flex:0 0 auto}
+  .brand{display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px;letter-spacing:.2px;color:#ab4600}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px var(--accentbg)}
+  .edition{font-size:10px;color:#a34400;background:#ffe2bd;border:1px solid #f9b56d;border-radius:999px;padding:1px 7px;letter-spacing:0}
   .brand em{font-style:normal;font-weight:400;color:var(--ink3);font-size:12px}
   .hdr-right{margin-left:auto;display:flex;align-items:center;gap:8px;color:var(--ink3);font-size:12px}
-  .hdr-right b{color:var(--blue);font-size:15px;font-variant-numeric:tabular-nums}
+  .hdr-right b{color:var(--accent);font-size:15px;font-variant-numeric:tabular-nums}
 
   .stats{display:grid;grid-template-columns:repeat(5,1fr);gap:9px;padding:12px 16px 0;flex:0 0 auto}
   .stat{background:#fff;border:1px solid var(--line);border-radius:9px;padding:9px 11px}
@@ -33,7 +34,7 @@
   .stat.g .v{color:var(--good)}
   .stat.b .v{color:var(--bad)}
   .stat.w .v{color:var(--warn)}
-  .stat.n .v{color:var(--blue)}
+  .stat.n .v{color:var(--accent)}
 
   .bar{display:flex;gap:8px;align-items:center;padding:11px 16px;flex:0 0 auto}
   .bar input,.bar select{
@@ -41,48 +42,48 @@
     font-size:12.5px;color:var(--ink);font-family:inherit;outline:none
   }
   .bar input{flex:1;min-width:120px}
-  .bar input:focus,.bar select:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(32,80,155,.08)}
+  .bar input:focus,.bar select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(232,107,10,.12)}
   .bar button{
     padding:7px 12px;border:1px solid var(--line);border-radius:7px;background:#fff;
     color:var(--ink2);font-size:12.5px;font-family:inherit;cursor:pointer;white-space:nowrap
   }
-  .bar button:hover{border-color:var(--blue);color:var(--blue)}
-  .bar button.primary{background:var(--blue);border-color:var(--blue);color:#fff}
-  .bar button.primary:hover{background:#183f7d;color:#fff}
+  .bar button:hover{border-color:var(--accent);color:var(--accent)}
+  .bar button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .bar button.primary:hover{background:#bb5200;color:#fff}
 
   .tablewrap{flex:1 1 auto;overflow:auto;padding:0 16px 8px}
   table{width:100%;border-collapse:separate;border-spacing:0;background:#fff;
     border:1px solid var(--line);border-radius:10px;overflow:hidden;font-size:12.5px}
   thead th{
-    position:sticky;top:0;z-index:2;background:#f0f3f8;color:var(--ink2);font-weight:600;
+    position:sticky;top:0;z-index:2;background:#fff0df;color:var(--ink2);font-weight:600;
     font-size:11.5px;text-align:left;padding:8px 9px;border-bottom:1px solid var(--line);white-space:nowrap
   }
   tbody td{padding:7px 9px;border-bottom:1px solid var(--soft);vertical-align:middle}
   tbody tr:last-child td{border-bottom:none}
-  tbody tr:hover{background:#fafbfd}
+  tbody tr:hover{background:#fff5e9}
   .sc{display:inline-block;min-width:32px;text-align:center;font-weight:700;font-variant-numeric:tabular-nums;
     padding:1px 5px;border-radius:4px;font-size:12px}
   .sc.strong{background:var(--goodbg);color:var(--good);border:1px solid var(--goodline)}
-  .sc.neutral{background:var(--bluebg);color:var(--blue);border:1px solid var(--blueline)}
+  .sc.neutral{background:var(--accentbg);color:var(--accent);border:1px solid var(--accentline)}
   .sc.weak{background:var(--warnbg);color:var(--warn);border:1px solid var(--warnline)}
   .sc.poor{background:var(--badbg);color:var(--bad);border:1px solid var(--badline)}
   .sc.insufficient,.sc.irrelevant{background:#f1f3f7;color:var(--ink3);border:1px solid var(--line)}
   .jt{max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .jt a{color:var(--ink);text-decoration:none;font-weight:600}
-  .jt a:hover{color:var(--blue);text-decoration:underline}
+  .jt a:hover{color:var(--accent);text-decoration:underline}
   .co{max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink2)}
   .sal{white-space:nowrap;color:var(--good);font-weight:600}
-  .grp{font-size:11px;padding:1px 6px;border-radius:4px;background:var(--bluebg);color:var(--blue);
-    border:1px solid var(--blueline);white-space:nowrap}
+  .grp{font-size:11px;padding:1px 6px;border-radius:4px;background:var(--accentbg);color:var(--accent);
+    border:1px solid var(--accentline);white-space:nowrap}
   .days{white-space:nowrap;color:var(--ink3);font-variant-numeric:tabular-nums}
   .days.stale{color:var(--warn);font-weight:600}
   .del{border:none;background:transparent;color:#c3cad6;cursor:pointer;font-size:15px;line-height:1;padding:2px 4px;border-radius:4px}
   .del:hover{background:var(--badbg);color:var(--bad)}
   .empty{padding:44px 20px;text-align:center;color:var(--ink3);font-size:13px;line-height:2}
   .empty b{color:var(--ink2)}
-  .empty code{background:#eef1f6;padding:1px 5px;border-radius:4px;font-size:12px}
+  .empty code{background:#fff0df;padding:1px 5px;border-radius:4px;font-size:12px}
 
-  footer{flex:0 0 auto;padding:9px 16px 11px;border-top:1px solid var(--line);background:#fff;
+  footer{flex:0 0 auto;padding:9px 16px 11px;border-top:1px solid var(--line);background:#fff6eb;
     color:var(--ink3);font-size:11px;line-height:1.6;display:flex;gap:12px;align-items:center}
   footer .sp{flex:1}
   footer button{border:1px solid var(--line);background:#fff;color:var(--ink3);font-size:11px;
@@ -93,7 +94,7 @@
 <body>
 
 <header>
-  <div class="brand"><span class="dot"></span>岗位雷达<em>本地岗位库</em></div>
+  <div class="brand"><span class="dot"></span>岗位雷达<em>本地岗位库</em><span class="edition">白橙版 v0.1.5</span></div>
   <div class="hdr-right"><b id="total">0</b> 条记录</div>
 </header>
 

@@ -156,6 +156,43 @@
     });
   }
 
+  function glyphSamples() {
+    var d = doc();
+    if (!d || !d.body) return [];
+    var els = d.body.querySelectorAll('*');
+    var found = [];
+    var limit = Math.min(els.length, 5000);
+    for (var i = 0; i < limit; i++) {
+      var el = els[i];
+      if (el.id === HOST_ID || (el.closest && el.closest('#' + HOST_ID))) continue;
+      if (el.children.length > 1) continue;
+      var t = clean(el.textContent);
+      if (t.length < 2 || t.length > 32) continue;
+      if (!/[\uE000-\uF8FF\uFFFD]|[Kk](?:[·・]\d+薪)?$/.test(t)) continue;
+      var r = E && E.rectOf ? E.rectOf(el) : null;
+      if (!r || r.width < 1) continue;
+      var family = '';
+      try { family = getComputedStyle(el).fontFamily || ''; } catch (e) { /* 无布局环境 */ }
+      var codes = Array.from(t.slice(0, 24)).map(function (c) {
+        return 'U+' + c.codePointAt(0).toString(16).toUpperCase().padStart(4, '0');
+      }).join(' ');
+      var attrs = ['aria-label', 'title', 'data-salary', 'data-pay', 'data-value']
+        .map(function (name) {
+          var value = el.getAttribute(name);
+          return value ? name + '=' + q(value) : '';
+        }).filter(Boolean).join(' ');
+      found.push({
+        right: r.left >= (global.innerWidth || 1400) * 0.35,
+        top: r.top,
+        line: '  ' + q(t) + ' [' + codes + '] font=' + cut(family, 70) + ' ' +
+          (E && E.pathOf ? E.pathOf(el, 4) : sig(el)) + ' ' + box(el) +
+          (attrs ? ' ' + attrs : '')
+      });
+    }
+    found.sort(function (a, b) { return Number(b.right) - Number(a.right) || a.top - b.top; });
+    return found.slice(0, 20).map(function (x) { return x.line; });
+  }
+
   function report(adapter) {
     var d = doc();
     var lines = [];
@@ -219,6 +256,13 @@
     if (big.length) {
       lines.push('【全页大字号元素 top 12】');
       lines.push.apply(lines, big);
+      lines.push('');
+    }
+
+    var glyphs = glyphSamples();
+    if (glyphs.length) {
+      lines.push('【薪资字形线索（字符码 / 字体 / 属性）】');
+      lines.push.apply(lines, glyphs);
       lines.push('');
     }
 

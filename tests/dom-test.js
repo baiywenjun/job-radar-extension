@@ -321,6 +321,7 @@ const dom6 = setup('<div></div>', 'https://www.zhipin.com/job_detail/abc123.html
 
 let saveCalled = 0;
 let copyCalled = 0;
+let diagCalled = 0;
 
 P.bind();
 P.show({
@@ -333,6 +334,7 @@ P.show({
 }, {
   onSave: function () { saveCalled++; },
   onCopy: function () { copyCalled++; },
+  onDiag: function () { diagCalled++; },
   onReextract: function () {}
 });
 
@@ -347,6 +349,8 @@ check('面板：显示档位文案', panelText.indexOf(ev1.gradeLabel) !== -1);
 check('面板：列出强信号词', panelText.indexOf('vLLM') !== -1);
 check('面板：显示 JD 来源', panelText.indexOf('JD 来源') !== -1);
 check('面板：显示保存按钮', panelText.indexOf('保存到本地库') !== -1);
+check('面板：显示白橙版标记', panelText.indexOf('白橙版 v0.1.5') !== -1);
+check('面板：使用橙色主题', host.shadowRoot.querySelector('style').textContent.indexOf('--accent:#e86b0a') !== -1);
 
 function fireClick(sel) {
   const btn = host.shadowRoot.querySelector(sel);
@@ -362,6 +366,9 @@ check('面板：点击保存触发回调', saveCalled === 1, '实际调用 ' + s
 check('面板：找到复制按钮', !!host.shadowRoot.querySelector('[data-act="copy"]'));
 fireClick('[data-act="copy"]');
 check('面板：点击复制触发回调', copyCalled === 1, '实际调用 ' + copyCalled + ' 次');
+check('面板：找到复制诊断按钮', !!host.shadowRoot.querySelector('[data-act="diag"]'));
+fireClick('[data-act="diag"]');
+check('面板：点击诊断触发回调', diagCalled === 1, '实际调用 ' + diagCalled + ' 次');
 
 check('面板：找到折叠按钮', !!host.shadowRoot.querySelector('[data-act="toggle"]'));
 fireClick('[data-act="toggle"]');
@@ -383,6 +390,7 @@ P.notice('未能识别本页岗位', [
 ]);
 const text3 = host.shadowRoot.textContent;
 check('诊断态：显示标题', text3.indexOf('未能识别本页岗位') !== -1);
+check('诊断态：仍显示白橙版标记', text3.indexOf('白橙版 v0.1.5') !== -1);
 check('诊断态：显示诊断信息', text3.indexOf('BOSS 直聘') !== -1);
 check('诊断态：面板保持可见', host.style.display !== 'none');
 check('诊断态：不再渲染打分环', !host.shadowRoot.querySelector('.jr-ring'));

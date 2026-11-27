@@ -2,16 +2,17 @@
  *
  * 现场：BOSS 搜索结果页 URL 为
  *   /web/geek/jobs?query=FDE&city=101280100&industry=&position=
- * position 为空 => 没有选中任何岗位，页面只有左侧列表。
+ * 这个用例的 DOM 没有右侧详情；实际站点选中岗位后 URL 仍可能不变。
  * 旧版 pageHasJobHint() 只扫正文前 6000 字，列表里出现「职位描述」字样
  * 就判为「页面像岗位详情」，于是弹出「未能识别本页岗位」的红色诊断卡，
  * 并用 console.warn 写日志 —— Chrome 会把它计入扩展的「错误」面板，
  * 用户看到的就是「插件直接报错」。
  *
- * 这里验证三件事：
+ * 这里验证四件事：
  *   1. 列表页不产生 warn / error（扩展错误面板保持干净）
  *   2. 列表页显示的是「等待选择岗位」轻提示，不是诊断卡
- *   3. 点选岗位后能正常恢复为评分面板
+ *   3. 点选岗位后能正常恢复为评分面板，200–249 字的真实 JD 也能评分
+ *   4. 真正抽不到字段时仍显示诊断，但不污染扩展「错误」面板
  */
 const { JSDOM, VirtualConsole } = require('jsdom');
 const fs = require('fs');
@@ -84,12 +85,14 @@ function detailHtml() {
 
 const warnLog = [];
 const errorLog = [];
+const infoLog = [];
 
 function boot(html, url) {
   const vc = new VirtualConsole();
   vc.on('jsdomError', (e) => errorLog.push('[jsdomError] ' + e.message));
   vc.on('warn', (m) => warnLog.push(String(m)));
   vc.on('error', (m) => errorLog.push(String(m)));
+  vc.on('info', (m) => infoLog.push(String(m)));
 
   const dom = new JSDOM(html, {
     url: url,
@@ -182,9 +185,47 @@ async function main() {
     (warnLog.join(' | ') + ' || ' + errorLog.join(' | ')));
   a.dom.window.close();
 
-  /* ================= 场景二：详情已展开但抽不到（真故障） ================= */
+  /* ================= 场景二：已展开的 BOSS 详情，JD 为 236 字 ================= */
   warnLog.length = 0;
   errorLog.length = 0;
+  infoLog.length = 0;
+  const shortHtml = `
+<div class="page-jobs-main">
+  <ul class="job-list">
+    <li class="job-card-box"><div class="job-info"><div class="job-title"><span class="name">FDE工程师</span><span class="job-salary">10-11K</span></div><div class="company-name">广州羽淼白品牌管理</div></div></li>
+  </ul>
+  <div class="recommend-result-job">
+    <div class="job-detail-container"><div class="job-detail-box">
+      <div class="job-detail-header"><div class="job-header-info">
+        <div class="job-detail-info"><span class="job-name">FDE工程师</span><span class="job-salary">10-11K</span></div>
+        <ul class="tag-list"><li>广州</li><li>经验不限</li><li>学历不限</li></ul>
+      </div></div>
+      <div class="job-detail-body"><h3 class="title">职位描述</h3><p class="desc">${JD_BASE.slice(0, 236)}</p></div>
+    </div></div>
+  </div>
+</div>`;
+  const s = boot(shortHtml, 'https://www.zhipin.com/web/geek/jobs?city=101280100&query=FDE');
+  const shortFields = s.w.JR_EXTRACT.extract(s.w.JR_ADAPTERS.SITE_ADAPTERS[0]);
+  check('短 JD：实际抽取长度在 200–249 字之间',
+    !!shortFields && shortFields.jdText.length >= 200 && shortFields.jdText.length < 250,
+    '实际 ' + (shortFields && shortFields.jdText.length));
+  check('短 JD：hasDetailPane 为 true',
+    s.w.JR_EXTRACT.hasDetailPane(s.w.JR_ADAPTERS.SITE_ADAPTERS[0]) === true);
+  s.w.eval(fs.readFileSync(path.join(__dirname, '..', 'src/content/main.js'), 'utf8'));
+  await wait(1200);
+  const shortText = panelText(s.w);
+  check('短 JD：正常显示职位名和薪资',
+    shortText.includes('FDE工程师') && shortText.includes('10-11K'), shortText.slice(0, 200));
+  check('短 JD：正常显示评分而非诊断卡',
+    shortText.includes('保存到本地库') && !shortText.includes('未能识别本页岗位'), shortText.slice(0, 200));
+  check('短 JD：没有写入扩展错误',
+    warnLog.length === 0 && errorLog.length === 0, warnLog.join(' | ') + ' || ' + errorLog.join(' | '));
+  s.dom.window.close();
+
+  /* ================= 场景三：详情已展开但抽不到（真故障） ================= */
+  warnLog.length = 0;
+  errorLog.length = 0;
+  infoLog.length = 0;
   /* JD 容器够长（>200 字）但页面没有任何职位名，模拟站点改版后标题选择器全失效 */
   const brokenHtml = `
 <div class="page">
@@ -207,7 +248,11 @@ async function main() {
   check('真故障：判断为有详情（hasDetailPane 为 true）',
     b.w.JR_EXTRACT.hasDetailPane(b.w.JR_ADAPTERS.SITE_ADAPTERS[0]) === true);
   check('真故障：显示诊断卡', textB.indexOf('未能识别本页岗位') !== -1, textB.slice(0, 200));
-  check('真故障：写入且仅写入一次 warn', warnLog.length === 1, '实际 ' + warnLog.length + ' 次：' + warnLog.join(' | '));
+  check('真故障：记录且仅记录一次诊断信息',
+    infoLog.filter((m) => m.includes('岗位信息待校准')).length === 1,
+    '实际 ' + infoLog.join(' | '));
+  check('真故障：没有写入扩展错误', warnLog.length === 0 && errorLog.length === 0,
+    warnLog.join(' | ') + ' || ' + errorLog.join(' | '));
 
   /* 连续 DOM 抖动不应重复写日志 */
   for (let i = 0; i < 6; i++) {
@@ -215,8 +260,9 @@ async function main() {
     await wait(150);
   }
   await wait(500);
-  check('真故障：重复触发后 warn 仍只有 1 条', warnLog.length === 1,
-    '实际 ' + warnLog.length + ' 次：' + warnLog.join(' | '));
+  check('真故障：重复触发后诊断日志仍只有 1 条',
+    infoLog.filter((m) => m.includes('岗位信息待校准')).length === 1,
+    '实际 ' + infoLog.join(' | '));
   b.dom.window.close();
 
   console.log('\n结果：通过 ' + pass + ' / 失败 ' + fail);

@@ -43,14 +43,12 @@
     return;
   }
 
-  /* 日志分级很关键：内容脚本的 console.warn 会被 Chrome 计入扩展的「错误」面板，
-     在搜索列表页这种正常场景下写 warn，用户会以为插件崩了。
-     非致命状态一律用 info，只有真正的抽取失败才 warn，且同一 URL 只写一次。 */
-  function logOnce(kind, level, msg) {
+  /* 页面抽取失败属于可恢复的站点状态，面板会显示诊断信息。内容脚本的
+     console.warn 会被 Chrome 计入扩展「错误」，因此这些状态统一用 info。 */
+  function logOnce(kind, msg) {
     if (lastIssueKey === kind) return;
     lastIssueKey = kind;
-    if (level === 'warn') console.warn(TAG + ' ' + msg);
-    else console.info(TAG + ' ' + msg);
+    console.info(TAG + ' ' + msg);
   }
 
   /* 指纹带上 JD 前 120 字与 URL：切换左侧岗位时职位名 / 薪资可能相近，
@@ -250,8 +248,11 @@
     if (!adapter) return;
     var f = E.extract(adapter);
     var isDetail = A.isDetailPage(adapter, location.href);
-    var minJd = isDetail ? 120 : 250;
-    var ok = !!f && !!f.jobTitle && f.jdText.length >= minJd;
+    var hasPane = isDetail || E.hasDetailPane(adapter);
+    /* 搜索页用同一份 JD 级证据判定「详情已展开」和「可以评分」。
+       旧版前者要求 200 字、后者要求 250 字，真实的短 JD 会被误报为失败。 */
+    var minJd = isDetail ? 120 : 200;
+    var ok = !!f && !!f.jobTitle && hasPane && f.jdText.length >= minJd;
 
     /* SPA 详情面板常延迟渲染：抽不到时先重试，不要立刻判死 */
     if (!ok && shouldRetry(f, isDetail)) {
@@ -264,11 +265,9 @@
 
     if (!ok) {
       /* 关键分支：必须区分「本页没有岗位详情」与「详情在但抽不到」。
-         BOSS 搜索页 URL 一直是 /web/geek/jobs?query=...，position 为空时
-         只是列表页；列表卡片本身就有 .job-title .name 和 .salary，
+         BOSS 搜索页选中岗位后 URL 也可能仍是 /web/geek/jobs?query=...；
+         列表卡片本身就有 .job-title .name 和 .salary，
          因此不能靠这些选择器判断「是否打开了详情」，只能认 JD 级证据。 */
-      var hasPane = isDetail || E.hasDetailPane(adapter);
-
       if (!hasPane) {
         noPaneStreak++;
         emptyStreak = 0;
@@ -287,7 +286,7 @@
           foot: '这是正常状态，不是插件故障。若右侧确实已经展示了岗位详情，点「复制诊断」把结果发给维护者。',
           handlers: handlers()
         });
-        logOnce('no-pane:' + location.pathname, 'info',
+        logOnce('no-pane:' + location.pathname,
           '本页暂无岗位详情（列表页或未选中岗位），已显示等待提示');
         return;
       }
@@ -314,8 +313,8 @@
         foot: '站点改版后类名会整体失效，且 BOSS 会拦截 F12。点下方「复制诊断信息」，把结果粘给维护者即可远程校准，不需要开发者工具。',
         handlers: handlers()
       });
-      logOnce('extract-fail:' + location.href, 'warn',
-        '抽取失败（详情已展开但关键字段为空）：' + adapter.name + ' / ' + location.href);
+      logOnce('extract-fail:' + location.href,
+        '岗位信息待校准（详情已展开但字段不完整）：' + adapter.name + ' / ' + location.href);
       return;
     }
 

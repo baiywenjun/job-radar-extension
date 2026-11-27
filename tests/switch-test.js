@@ -27,7 +27,7 @@ function check(name, cond, detail) {
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/* 详情页 URL 不匹配 detailPattern，所以主流程要求 JD >= 250 字才显示。
+/* 详情页 URL 不匹配 detailPattern，所以主流程要求 JD >= 200 字才显示。
    这段文本同时含有强信号词，保证打分链路也被真实跑到。 */
 const JD_BASE =
   '一、岗位定位：作为深入客户一线的复合型技术交付角色，承担大模型应用与智能体项目的端到端落地交付。' +
