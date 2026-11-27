@@ -18,13 +18,33 @@ var S = JR_SETTINGS;
 var P = JR_PROFILES;
 var J = JR_JUDGE;
 
-function pad2(n) {
-  return n < 10 ? '0' + n : String(n);
+/* 日期口径统一放在 judge.js：usage 的主键与面板显示必须永远一致，
+   两处各算一遍迟早在时区或跨零点上对不上。 */
+function todayKey() {
+  return J.dateKey();
 }
 
-function todayKey() {
-  var d = new Date();
-  return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+function monthKey() {
+  return J.monthKey();
+}
+
+function sumUsage(list) {
+  var out = { calls: 0, inTokens: 0, outTokens: 0, cost: 0 };
+  (list || []).forEach(function (u) {
+    out.calls += Number(u.calls) || 0;
+    out.inTokens += Number(u.inTokens) || 0;
+    out.outTokens += Number(u.outTokens) || 0;
+    out.cost += Number(u.cost) || 0;
+  });
+  out.cost = Math.round(out.cost * 1e6) / 1e6;
+  return out;
+}
+
+function listUsageSafe(prefix) {
+  try {
+    if (JR_DB && JR_DB.listUsage) return JR_DB.listUsage(prefix);
+  } catch (e) { /* 落到下面的空数组 */ }
+  return Promise.resolve([]);
 }
 
 function fail(e) {
@@ -73,7 +93,9 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
   if (PRIVATE[msg.type] && !fromExtensionPage(sender)) return deny(sendResponse);
 
   /* 内容脚本唯一的设置入口：只给"能不能用、用哪个标准"，不给 Key、不给单价。
-     标准只回 id / 名称 / 版本，不回 requirement 原文——面板要的只是下拉选项。 */
+     标准只回 id / 名称 / 版本，不回 requirement 原文——面板要的只是下拉选项。
+     dailyUsed / coolingUntil / disclosureAccepted 都是"该不该发请求"的判断依据，
+     不含任何敏感内容，可以给。 */
   if (msg.type === 'SETTINGS_PUBLIC') {
     return reply(Promise.all([
       S.get(),
@@ -91,8 +113,10 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
           hasKey: !!s.apiKey,
           autoJudge: s.autoJudge,
           dailyLimit: s.dailyLimit,
+          dailyUsed: u.calls || 0,
           baseOrigin: S.originOf(s.baseURL),
-          dailyUsed: u.calls || 0
+          disclosureAccepted: !!s.disclosureAccepted,
+          coolingUntil: Number(s.rateLimitUntil) || 0
         },
         active: a.profile
           ? { id: a.profile.id, name: a.profile.name, version: a.profile.version }
@@ -101,6 +125,15 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
           return { id: p.id, name: p.name, version: p.version };
         })
       };
+    }), sendResponse);
+  }
+
+  /* 外发确认只需要写一个布尔值，所以单独开一条消息，
+     不把 SETTINGS_SAVE 暴露给内容脚本（那等于让它改 Key 和任何设置）。
+     字段名写死，msg 里带什么都不采纳。 */
+  if (msg.type === 'DISCLOSURE_ACCEPT') {
+    return reply(S.save({ disclosureAccepted: true }).then(function () {
+      return { disclosureAccepted: true };
     }), sendResponse);
   }
 
@@ -230,14 +263,22 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
       JR_DB.count(),
       JR_DB.countVerdicts(),
       JR_DB.getUsage(todayKey()),
-      P.count()
+      P.count(),
+      listUsageSafe(monthKey()),
+      S.get().catch(function () { return {}; })
     ]).then(function (r) {
+      var month = sumUsage(r[4]);
+      var s = r[5] || {};
       return {
         jobs: r[0],
         verdicts: r[1],
         usageToday: r[2],
         profiles: r[3],
-        today: todayKey()
+        usageMonth: month,
+        budgetWarn: Number(s.monthlyBudgetWarn) || 0,
+        dailyLimit: Number(s.dailyLimit) || 0,
+        today: todayKey(),
+        month: monthKey()
       };
     }), sendResponse);
   }
@@ -306,6 +347,10 @@ chrome.runtime.onConnect.addListener(function (port) {
       sources: msg.sources,
       jdText: msg.jdText,
       profileId: msg.profileId,
+      /* 面板上的「手动放行」与「重新判定」都走这两面旗：
+         force 跳过缓存，allowOverLimit 同时越过每日上限与 429 冷却。 */
+      force: !!msg.force,
+      allowOverLimit: !!msg.allowOverLimit,
       signal: ctrl ? ctrl.signal : null,
       onDelta: function (chars) {
         /* 节流：流式块可能几十毫秒一个，直接透传会让面板高频重绘 */
@@ -316,6 +361,8 @@ chrome.runtime.onConnect.addListener(function (port) {
       }
     }).then(function (verdict) {
       post({ type: 'DONE', verdict: verdict });
+      /* 命中缓存不重复落库、也不计费：调用量与花费只在真的发过请求时发生 */
+      if (verdict && verdict.cached) return null;
       return persistVerdict(verdict, todayKey()).catch(function () {
         /* 落库失败不影响这次结论的展示 */
       });
@@ -339,6 +386,12 @@ chrome.runtime.onConnect.addListener(function (port) {
         reasoningChars: (e && e.reasoningChars) || 0,
         usage: (e && e.usage) || null,
         attempts: (e && e.attempts) || [],
+        /* 限额与冷却的数值要带给面板：文案里要写清「100/100」「还剩 4 分钟」，
+           面板据此决定是否显示「手动放行一次」 */
+        used: (e && typeof e.used === 'number') ? e.used : null,
+        limit: (e && typeof e.limit === 'number') ? e.limit : null,
+        remainMs: (e && typeof e.remainMs === 'number') ? e.remainMs : null,
+        evidenceFlag: (e && e.evidenceFlag) || '',
         retryable: RETRYABLE[code] === 1
       });
     }).then(function () {

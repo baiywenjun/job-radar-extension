@@ -193,6 +193,23 @@
       onCopy: onCopy,
       onDiag: onDiag,
       onSwitchProfile: onSwitchProfile,
+      /* 手动放行：跳过 429 冷却与当日上限，但仍然允许吃缓存——
+         用户要的是"现在给我结论"，不是"再花一次钱"。 */
+      onForceJudge: function (data) {
+        if (!data || !cfg) return;
+        startJudge(data, { allowOverLimit: true });
+      },
+      /* 同意外发只写一个布尔值。写成功才发请求，
+         失败就停在确认卡上——静默重试等于绕过用户的知情同意。 */
+      onAcceptDisclosure: function (data) {
+        if (!data) return;
+        chrome.runtime.sendMessage({ type: 'DISCLOSURE_ACCEPT' }, function (res) {
+          if (chrome.runtime.lastError) return;
+          if (!res || !res.ok) return;
+          if (cfg && cfg.settings) cfg.settings.disclosureAccepted = true;
+          startJudge(data, {});
+        });
+      },
       onReextract: function () {
         lastFingerprint = '';
         retry = 0;
@@ -222,6 +239,15 @@
 
   function ensureConfig() {
     if (cfg) return Promise.resolve(cfg);
+    return loadConfig().then(function (c) {
+      if (c) cfg = c;
+      return cfg;
+    });
+  }
+
+  /* 每次渲染新岗位都重取一次：当日已用次数、429 冷却截止时间都在变，
+     拿首屏那份快照判断限额会一直用旧数字（判定一次后仍显示 3/100）。 */
+  function refreshConfig() {
     return loadConfig().then(function (c) {
       if (c) cfg = c;
       return cfg;
@@ -279,10 +305,36 @@
       P.update();
       return;
     }
+
+    /* 三个"现在不该自动发请求"的理由，呈现方式各不同：
+       冷却与超限要给手动放行，外发确认只要点一次同意。 */
+    var now = Date.now();
+    var coolingUntil = Number(s.coolingUntil) || 0;
+    if (coolingUntil > now) {
+      data.judge = { status: 'limited', reason: 'cooldown', remainMs: coolingUntil - now };
+      P.update();
+      return;
+    }
+    var limit = Number(s.dailyLimit) || 0;
+    if (limit > 0 && Number(s.dailyUsed) >= limit) {
+      data.judge = { status: 'limited', reason: 'day', used: Number(s.dailyUsed), limit: limit };
+      P.update();
+      return;
+    }
+    if (!s.disclosureAccepted) {
+      data.judge = {
+        status: 'disclosure',
+        origin: s.baseOrigin || '',
+        jdChars: (data.fields.jdText || '').length
+      };
+      P.update();
+      return;
+    }
     startJudge(data);
   }
 
-  function startJudge(data) {
+  function startJudge(data, opts) {
+    opts = opts || {};
     if (!chrome.runtime || !chrome.runtime.connect) {
       data.judge = { status: 'off', error: '当前环境不支持模型判定' };
       P.update();
@@ -362,7 +414,9 @@
       },
       sources: f.sources || {},
       jdText: f.jdText,
-      profileId: cfg.active.id
+      profileId: cfg.active.id,
+      force: !!opts.force,
+      allowOverLimit: !!opts.allowOverLimit
     });
   }
 
@@ -380,8 +434,18 @@
       model: verdict.model,
       ms: verdict.ms,
       usage: verdict.usage,
+      cost: verdict.cost,
+      cached: !!verdict.cached,
+      cacheAgeMs: verdict.cacheAgeMs || 0,
       profileName: verdict.profileName
     };
+    data.evidenceCheck = verdict.evidenceCheck || null;
+
+    /* 命中缓存不消耗额度。自增放在本地比再问一次后台便宜，
+       而且 panel 只关心「现在第几次」。 */
+    if (!verdict.cached && cfg && cfg.settings) {
+      cfg.settings.dailyUsed = (Number(cfg.settings.dailyUsed) || 0) + 1;
+    }
 
     try {
       window.__jrJudgeDiag = {
@@ -391,7 +455,11 @@
         baseOrigin: cfg && cfg.settings ? cfg.settings.baseOrigin : '',
         ms: verdict.ms,
         grade: verdict.grade,
-        usage: verdict.usage || null
+        usage: verdict.usage || null,
+        cost: verdict.cost || 0,
+        cached: !!verdict.cached,
+        evidenceCheck: verdict.evidenceCheck || null,
+        evidenceFlag: verdict.evidenceFlag || ''
       };
     } catch (e) { /* 诊断是附加能力 */ }
 
@@ -399,7 +467,8 @@
     P.show(data, handlers());
     console.log(TAG + ' 模型结论 · ' + (data.fields.jobTitle || '未取到职位名') +
       ' · ' + verdict.gradeLabel + ' ' + verdict.score + ' 分 · ' +
-      verdict.model + ' · ' + verdict.ms + 'ms');
+      verdict.model + ' · ' + verdict.ms + 'ms' +
+      (verdict.cached ? ' · 缓存' : ''));
   }
 
   function failJudge(data, e) {
@@ -408,6 +477,31 @@
     /* 被新岗位取消属于正常流程，不是故障，也不该弹任何东西 */
     if (code === 'E_ABORT') {
       data.judge = { status: 'manual' };
+      return;
+    }
+
+    /* 冷却与超限都不是"失败"，是主动不请求。必须走 limited 而不是 failed，
+       否则面板会显示成「模型失败：今日已调用…」，用户以为是接口出错。 */
+    if (code === 'E_COOLDOWN' || code === 'E_LIMIT_DAY') {
+      if (code === 'E_COOLDOWN') {
+        var remain = (e && Number(e.remainMs)) || 0;
+        data.judge = { status: 'limited', reason: 'cooldown', remainMs: remain };
+        /* 记下截止时间，后续切换岗位时不必再撞一次才知道在冷却 */
+        if (cfg && cfg.settings) cfg.settings.coolingUntil = Date.now() + remain;
+      } else {
+        data.judge = {
+          status: 'limited',
+          reason: 'day',
+          used: (e && e.used) || 0,
+          limit: (e && e.limit) || 0
+        };
+        if (cfg && cfg.settings) {
+          cfg.settings.dailyUsed = (e && Number(e.used)) || cfg.settings.dailyUsed;
+        }
+      }
+      P.show(data, handlers());
+      logOnce('judge-limits:' + code + ':' + location.pathname,
+        '模型判定被限额拦住（' + code + '），面板已切到手动放行状态');
       return;
     }
 
@@ -635,8 +729,8 @@
     P.show(data, handlers());
 
     /* 配置是异步取的：首次进页面时可能还没回来。
-       拿到后补上标准下拉所需的数据，再启动模型判定。 */
-    ensureConfig().then(function (c) {
+       每次换岗位都重新取一遍，当日已用次数与冷却状态才是当下的真值。 */
+    refreshConfig().then(function (c) {
       if (!c) return;
       data.profiles = c.profiles || [];
       data.activeProfileId = c.active ? c.active.id : '';

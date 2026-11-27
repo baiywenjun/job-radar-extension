@@ -1,6 +1,7 @@
 /* 岗位雷达 · popup 视图：设置
- * 只做模型 API 与数据概览。判定行为（自动判定 / 每日上限）在 S2 接入判定链路时再加，
- * 避免出现"能勾但没效果"的控件。
+ * 三块：模型 API（Key / 单价）、判定行为（自动判定 / 每日上限 / 花费提醒 / 外发确认）、
+ * 我的数据（统计与清空）。判定行为的控件在 S3 接入限额链路时才允许出现——
+ * 能勾但没效果的控件比没有更糟。
  */
 (function () {
   'use strict';
@@ -31,6 +32,9 @@
     el.maxOut.value = s.maxOutputTokens;
     el.priceIn.value = s.priceInPerM;
     el.priceOut.value = s.priceOutPerM;
+    el.auto.checked = s.autoJudge !== false;
+    el.daily.value = s.dailyLimit;
+    el.monthWarn.value = s.monthlyBudgetWarn;
 
     if (!S.hasSession()) {
       var opt = el.keyMode.querySelector('option[value=session]');
@@ -51,18 +55,38 @@
       timeoutMs: Number(el.timeout.value),
       maxOutputTokens: Number(el.maxOut.value),
       priceInPerM: Number(el.priceIn.value),
-      priceOutPerM: Number(el.priceOut.value)
+      priceOutPerM: Number(el.priceOut.value),
+      autoJudge: el.auto.checked,
+      dailyLimit: Number(el.daily.value),
+      monthlyBudgetWarn: Number(el.monthWarn.value)
     };
+  }
+
+  function money(n) {
+    var v = Number(n) || 0;
+    if (v <= 0) return '0';
+    return v < 0.01 ? v.toFixed(4) : v.toFixed(2);
   }
 
   function renderStats(st) {
     if (!st) return;
     var u = st.usageToday || {};
+    var m = st.usageMonth || {};
     el.stats.innerHTML =
       cell(st.jobs || 0, '岗位记录') +
       cell(st.profiles || 0, '判定标准') +
       cell(st.verdicts || 0, '判定缓存') +
-      cell(u.calls || 0, '今日调用');
+      cell(u.calls || 0, '今日调用') +
+      cell('¥' + money(u.cost), '今日花费') +
+      cell('¥' + money(m.cost), '本月花费');
+
+    /* 超阈值只在设置页提示一次，不弹窗：提醒的目的是让人知道，
+       不是打断他正在做的事。 */
+    var warn = Number(st.budgetWarn) || 0;
+    var cost = Number(m.cost) || 0;
+    if (warn > 0 && cost >= warn) {
+      setMsg('本月模型花费 ¥' + money(cost) + '，已达提醒阈值 ¥' + money(warn), 'warn');
+    }
   }
 
   function cell(n, label) {
@@ -160,6 +184,7 @@
       fill(res.settings);
       setMsg('已保存', 'ok');
       loadStats();
+      if (window.JR_POPUP && window.JR_POPUP.refreshCost) window.JR_POPUP.refreshCost();
     }).catch(function (e) {
       busy = false;
       el.save.disabled = false;
@@ -210,6 +235,20 @@
     });
   }
 
+  /* 外发确认只在首次判定前问一次。要能重新触发，
+     否则用户想改主意（比如换了网关想再确认一次发什么）就没入口了。 */
+  function onResetDisclosure() {
+    send({ type: 'SETTINGS_SAVE', patch: { disclosureAccepted: false } }).then(function (res) {
+      el.disclosureMsg.textContent = res.ok
+        ? '已重置，下次判定前会再确认一次'
+        : (res.error || '重置失败');
+      el.disclosureMsg.className = 'msg ' + (res.ok ? 'ok' : 'bad');
+    }).catch(function (e) {
+      el.disclosureMsg.textContent = e.message || '重置失败';
+      el.disclosureMsg.className = 'msg bad';
+    });
+  }
+
   function bind() {
     el.save.addEventListener('click', onSave);
     el.test.addEventListener('click', onTest);
@@ -221,6 +260,7 @@
     });
 
     document.getElementById('stClearVerdicts').addEventListener('click', onClearVerdicts);
+    el.disclosureBtn.addEventListener('click', onResetDisclosure);
   }
 
   function init() {
@@ -238,6 +278,11 @@
       maxOut: document.getElementById('stMaxOut'),
       priceIn: document.getElementById('stPriceIn'),
       priceOut: document.getElementById('stPriceOut'),
+      auto: document.getElementById('stAuto'),
+      daily: document.getElementById('stDaily'),
+      monthWarn: document.getElementById('stMonthWarn'),
+      disclosureBtn: document.getElementById('stResetDisclosure'),
+      disclosureMsg: document.getElementById('stDisclosureMsg'),
       save: document.getElementById('stSave'),
       test: document.getElementById('stTest'),
       msg: document.getElementById('stMsg'),

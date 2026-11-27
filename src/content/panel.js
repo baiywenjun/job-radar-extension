@@ -14,7 +14,7 @@
         return global.chrome.runtime.getManifest().version;
       }
     } catch (e) { /* 非扩展环境 */ }
-    return '0.2.3';
+    return '0.2.4';
   })();
 
   function brand() {
@@ -89,13 +89,25 @@
 .jr-chip.n{background:var(--accentbg);border-color:var(--accentline);color:var(--accent)}
 .jr-chip.b{background:var(--badbg);border-color:var(--badline);color:var(--bad)}
 .jr-chip.miss{background:#fbfbfd;border-color:#e5e9f2;color:#9aa5b6;border-style:dashed}
+/* 未能核实的证据：标灰 + 虚线。不能用删除线——那看起来像"已排除"，
+   而实际情况是"模型说了，但在 JD 里找不到依据"，两者含义差别很大。 */
+.jr-chip.unv{background:#fbfbfd;border-color:#e5e9f2;color:#9aa5b6;border-style:dashed}
 .jr-empty{font-size:11.5px;color:#aab3c2}
+
+/* 流式进度：字符数除以经验值 600 封顶 92%，剩下的 8% 留给解析与落库。
+   目的是让用户看到"在动"，不是精确进度条。 */
+.jr-prog{height:3px;background:#f6e7d6;overflow:hidden}
+.jr-prog i{display:block;height:100%;background:linear-gradient(90deg,#ffc88c,#e86b0a);transition:width .35s ease}
 
 .jr-note{font-size:11px;color:var(--ink3);background:#fff8ef;border:1px solid var(--soft);
   border-radius:6px;padding:7px 9px;margin-bottom:11px;line-height:1.5}
 .jr-note b{color:var(--ink2)}
 .jr-note.warn{background:var(--warnbg);border-color:var(--warnline);color:var(--warn)}
 .jr-note.bad{background:var(--badbg);border-color:var(--badline);color:var(--bad)}
+/* 卡片内的按钮不吃 footer 的 flex:1，否则会被压成一条细线 */
+.jr-note .jr-btn{display:block;width:100%;flex:none;margin-top:7px}
+.jr-note code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;
+  background:rgba(0,0,0,.05);padding:0 3px;border-radius:3px}
 
 .jr-std{display:flex;align-items:center;gap:7px;padding:6px 13px;background:#fff8ef;
   border-bottom:1px solid var(--line);font-size:11px;color:var(--ink3);flex:0 0 auto}
@@ -255,19 +267,50 @@
     return v >= 1000 ? (v / 1000).toFixed(1) + 'k' : String(v);
   }
 
+  /* 单价没填时 cost 恒为 0，这里返回空串而不是「¥0.0000」：
+     显示一个假的 0 元会让人以为真的不花钱。 */
+  function fmtCost(v) {
+    var n = Number(v);
+    if (!isFinite(n) || n <= 0) return '';
+    return n < 0.01 ? '¥' + n.toFixed(4) : '¥' + n.toFixed(3);
+  }
+
+  function fmtAgo(ms) {
+    var m = Math.round((Number(ms) || 0) / 60000);
+    if (m < 1) return '刚刚';
+    if (m < 60) return m + ' 分钟前';
+    var h = Math.round(m / 60);
+    if (h < 24) return h + ' 小时前';
+    return Math.round(h / 24) + ' 天前';
+  }
+
+  function fmtLeft(ms) {
+    var m = Math.ceil((Number(ms) || 0) / 60000);
+    return Math.max(1, m) + ' 分';
+  }
+
   /* 底部必须说清"现在看到的结论是谁给的"。任何降级都要写明原因，
-     否则用户会把本地词库的分数当成模型判断——这是本工具最容易误导人的地方。 */
+     否则用户会把本地词库的分数当成模型判断——这是本工具最容易误导人的地方。
+     缓存命中要显式标「缓存」，否则用户会以为又花了一次钱。 */
   function judgeLabel(d) {
     var j = d.judge || {};
     if (j.status === 'running') {
       return '模型判定中…' + (j.chars ? ' 已收 ' + j.chars + ' 字' : '');
     }
     if (j.status === 'done') {
+      if (j.cached) return '缓存 · ' + fmtAgo(j.cacheAgeMs);
       var parts = ['模型 ' + (j.model || '')];
       if (j.usage && j.usage.total) parts.push(fmtTokens(j.usage.total) + ' tokens');
+      var c = fmtCost(j.cost);
+      if (c) parts.push(c);
       if (j.ms) parts.push((j.ms / 1000).toFixed(1) + 's');
       return parts.join(' · ');
     }
+    if (j.status === 'limited') {
+      if (j.reason === 'cooldown') return '本地规则（限流冷却中，剩 ' + fmtLeft(j.remainMs) + '）';
+      return '本地规则（今日已达上限 ' + (j.used || 0) + '/' + (j.limit || 0) + '）';
+    }
+    if (j.status === 'disclosure') return '本地规则（等待确认外发）';
     if (j.status === 'failed') {
       /* 底部是一行小字，失败原因可能带重试说明（很长）。
          截断到能看懂成因，细节留给「复制诊断」。 */
@@ -304,6 +347,7 @@
     var src = f.sources || {};
     var color = gradeColor(ev.grade);
     var modelMode = !!ev.modelMode;
+    var j = d.judge || {};
 
     /* 模型给了 oneLine 就用它替换套话描述；没给（规则模式）保持原样 */
     var gdesc = (d.verdict && d.verdict.oneLine) ? d.verdict.oneLine : ev.gradeDesc;
@@ -322,7 +366,7 @@
     /* 模型模式下 chip 的 title 是原文引用，方便一眼核对是否真在 JD 里 */
     var strongChips = ev.strong.length
       ? ev.strong.map(function (x) {
-          var cls = x.type === 'nice' ? 'n' : 'g';
+          var cls = (x.type === 'nice' ? 'n' : 'g') + (x.unverified ? ' unv' : '');
           return '<span class="jr-chip ' + cls + '"' +
             (x.note ? ' title="' + esc(x.note) + '"' : '') + '>' + esc(x.term) + '</span>';
         }).join('')
@@ -348,7 +392,8 @@
     var weakChips = ev.weak.length
       ? ev.weak.map(function (x) {
           var w = (typeof x.w === 'number' && x.w !== 0) ? ' ' + x.w : '';
-          return '<span class="jr-chip b"' +
+          var cls = 'b' + (x.unverified ? ' unv' : '');
+          return '<span class="jr-chip ' + cls + '"' +
             (x.note ? ' title="' + esc(x.note) + '"' : '') + '>' + esc(x.term) + w + '</span>';
         }).join('')
       : '<span class="jr-empty">' + (modelMode ? '模型未指出减分项' : '无减分项') + '</span>';
@@ -360,6 +405,35 @@
     }
 
     var notes = '';
+
+    /* 外发确认：没同意过就不发请求，卡片直接摆在正文顶部。
+       必须写明目标域名与「不脱敏」，否则用户不知道自己发出去的是什么。 */
+    if (j.status === 'disclosure') {
+      notes += '<div class="jr-note warn"><b>首次把岗位内容发给模型</b><br>' +
+        '目标：<code>' + esc(j.origin || '未配置 baseURL') + '</code><br>' +
+        '将发送：职位、公司、薪资、城市、经验，以及 JD 全文（' + (j.jdChars || 0) + ' 字）。<br>' +
+        '<b>不脱敏</b>：原文里若有电话、邮箱等联系方式会一并发出。只发当前这一个岗位，不批量。<br>' +
+        '<button class="jr-btn primary" data-act="accept-disclosure">同意并开始判定</button></div>';
+    }
+
+    if (j.status === 'limited') {
+      notes += '<div class="jr-note warn"><b>' +
+        (j.reason === 'cooldown' ? '刚触发限流，暂停自动判定' : '今日调用已达上限') + '</b>：' +
+        (j.reason === 'cooldown'
+          ? '约 ' + fmtLeft(j.remainMs) + ' 后恢复，期间不再自动请求，避免继续撞 429。'
+          : '已调用 ' + (j.used || 0) + ' / ' + (j.limit || 0) + ' 次，可在设置里调高上限。') +
+        '下面显示的是本地词库结果。</div>';
+    }
+
+    /* 证据核对失败要显眼：这是「模型可能编了原文」的唯一信号，
+       藏在小字里等于没有。 */
+    var ec = ev.evidenceCheck || d.evidenceCheck;
+    if (ec && ec.checked > 0 && ec.rate < 0.5) {
+      notes += '<div class="jr-note bad"><b>证据未能核实</b>：模型引用的 ' + ec.checked +
+        ' 段原文里有 ' + (ec.checked - ec.passed) + ' 段在 JD 中找不到，置信度已下调。' +
+        '灰色标签就是未能核实的条目，别只看分数。</div>';
+    }
+
     if (ev.grade === 'insufficient') {
       notes += modelMode
         ? '<div class="jr-note warn"><b>模型判定为信息不足</b>：' +
@@ -383,6 +457,20 @@
       ? '更新记录 · 第 ' + d.seenCount + ' 次'
       : '保存到本地库';
 
+    /* 超限时把主按钮换成「手动放行一次」：这是用户唯一的出路，
+       藏在正文里的链接不如直接放到手边。 */
+    var mainBtn = j.status === 'limited'
+      ? '<button class="jr-btn primary" data-act="force-judge">手动放行一次</button>'
+      : '<button class="jr-btn ' + (d.saved ? 'done' : 'primary') + '" data-act="save">' +
+        esc(savedLabel) + '</button>';
+
+    /* 流式进度：按已收字符估算，封顶 92%，剩下留给解析与落库。
+       关掉流式时没有字符数，给一个 8% 的起始宽度表示"已经发出去了"。 */
+    var prog = j.status === 'running'
+      ? '<div class="jr-prog"><i style="width:' +
+        Math.max(8, Math.min(92, Math.round((j.chars || 0) / 6))) + '%"></i></div>'
+      : '';
+
     var tStrong = modelMode
       ? '支持证据 · 模型给出「' + ev.strong.length + '」条'
       : '强信号 · 有预算的建设项目（' + ev.strong.length + '）';
@@ -399,6 +487,7 @@
       '<button class="jr-icon" data-act="toggle" title="折叠 / 展开">' + (collapsed ? '＋' : '－') + '</button>' +
       '</div>' +
       stdBar(d) +
+      prog +
       '<div class="jr-body">' +
       '<div class="jr-score">' +
       '<div class="jr-ring" style="--p:' + ev.score + ';--c:' + color + '"><b>' + ev.score + '</b></div>' +
@@ -421,7 +510,7 @@
       '<div class="jr-sec"><h4>' + esc(tWeak) + '</h4><div class="jr-chips">' + weakChips + '</div></div>' +
       '</div>' +
       '<div class="jr-foot">' +
-      '<button class="jr-btn ' + (d.saved ? 'done' : 'primary') + '" data-act="save">' + esc(savedLabel) + '</button>' +
+      mainBtn +
       '<button class="jr-btn" data-act="copy">复制摘要</button>' +
       '<button class="jr-btn" data-act="diag">复制诊断</button>' +
       '</div>' +
@@ -450,6 +539,10 @@
         handlers.onCopy(lastData, btn);
       } else if (act === 're-extract' && handlers.onReextract) {
         handlers.onReextract();
+      } else if (act === 'force-judge' && handlers.onForceJudge) {
+        handlers.onForceJudge(lastData);
+      } else if (act === 'accept-disclosure' && handlers.onAcceptDisclosure) {
+        handlers.onAcceptDisclosure(lastData);
       } else if (act === 'diag' && handlers.onDiag) {
         handlers.onDiag(btn);
       }

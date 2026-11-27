@@ -8,7 +8,7 @@
 <body>
 
 <header>
-  <div class="brand"><span class="dot"></span>岗位雷达<span class="edition">v0.2.3</span></div>
+  <div class="brand"><span class="dot"></span>岗位雷达<span class="edition">v0.2.4</span></div>
   <nav class="tabs">
     <button class="tab active" data-view="profiles">判定标准</button>
     <button class="tab" data-view="library">岗位库</button>
@@ -17,6 +17,9 @@
     <button class="icon-btn" id="btnSettings" title="设置">⚙</button>
   </div>
 </header>
+
+<!-- 费用条：今天调了几次、花了多少。月度超阈值时变黄，提醒换更便宜的模型或调小上限。 -->
+<div class="costbar" id="costBar"></div>
 
 <main>
 
@@ -208,6 +211,33 @@
           <span class="msg" id="stMsg"></span>
         </div>
         <div class="st-result" id="stResult"></div>
+      </div>
+
+      <div class="card">
+        <h4>判定行为 <span class="tag">成本与可信</span></h4>
+        <p class="sub">同一条 JD 只调用一次，之后直接读本地缓存。超限或限流只停自动判定，面板仍会显示本地词库结果。</p>
+
+        <label class="check">
+          <input type="checkbox" id="stAuto">
+          <span>打开岗位时自动调用模型</span>
+        </label>
+
+        <div class="grid2">
+          <label class="field">
+            <span>每日调用上限（次）</span>
+            <input type="number" id="stDaily" step="1" min="1" max="10000">
+          </label>
+          <label class="field">
+            <span>月度花费提醒（元，0 为不提醒）</span>
+            <input type="number" id="stMonthWarn" step="1" min="0">
+          </label>
+        </div>
+        <div class="hint">达到上限后不再自动请求；需要时在面板上点「手动放行一次」。触发 429 会自动冷却 5 分钟。</div>
+
+        <div class="st-actions">
+          <button class="btn sm" id="stResetDisclosure">重新显示外发确认</button>
+          <span class="msg" id="stDisclosureMsg"></span>
+        </div>
       </div>
 
       <div class="card">

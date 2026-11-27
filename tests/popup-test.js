@@ -123,7 +123,12 @@ win.chrome = {
         } else if (msg.type === 'SETTINGS_GET') {
           cb({ ok: true, settings: SETTINGS });
         } else if (msg.type === 'STATS') {
-          cb({ ok: true, jobs: 4, profiles: 1, verdicts: 2, usageToday: { calls: 5 } });
+          cb({
+            ok: true, jobs: 4, profiles: 1, verdicts: 2,
+            usageToday: { calls: 5, cost: 0.0021 },
+            usageMonth: { calls: 12, cost: 0.0386 },
+            budgetWarn: 20
+          });
         } else if (msg.type === 'PROFILES_SAVE') {
           cb({ ok: true, record: Object.assign({}, PROFILES[0], { version: 3 }) });
         } else {
@@ -221,8 +226,15 @@ function wait(ms) {
     win.document.getElementById('stKey').value === 'sk-demodemodemodemo1234');
   check('Key 输入框类型是 password',
     win.document.getElementById('stKey').type === 'password');
-  check('统计渲染出四个格子', win.document.querySelectorAll('#stStats .cell').length === 4,
+  check('统计渲染出六个格子（含今日/本月花费）',
+    win.document.querySelectorAll('#stStats .cell').length === 6,
     String(win.document.querySelectorAll('#stStats .cell').length));
+  check('统计里出现今日花费 ¥0.0021',
+    win.document.getElementById('stStats').textContent.indexOf('¥0.0021') !== -1,
+    win.document.getElementById('stStats').textContent);
+  check('统计里出现本月花费 ¥0.04',
+    win.document.getElementById('stStats').textContent.indexOf('¥0.04') !== -1,
+    win.document.getElementById('stStats').textContent);
   check('统计里出现今日调用 5',
     win.document.getElementById('stStats').textContent.indexOf('5') !== -1,
     win.document.getElementById('stStats').textContent);

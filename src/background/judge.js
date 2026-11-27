@@ -17,6 +17,24 @@
   var CHAT_PATH = '/chat/completions';
   var ERR_BODY_LIMIT = 300;
   var CHARS_PER_TOKEN = 1.6;   // 中英混排的粗估，仅在接口不回 usage 时兜底
+  /* 429 之后多久不再自动请求。限流通常按分钟窗口恢复，
+     5 分钟既能覆盖多数窗口，又不至于让用户等到失去耐心。 */
+  var COOLDOWN_MS = 5 * 60 * 1000;
+
+  function pad2(n) {
+    return n < 10 ? '0' + n : String(n);
+  }
+
+  /* 与 usage 存储的 date 主键一致，跨 service worker 休眠也不能变 */
+  function dateKey(d) {
+    d = d || new Date();
+    return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+  }
+
+  function monthKey(d) {
+    d = d || new Date();
+    return d.getFullYear() + '-' + pad2(d.getMonth() + 1);
+  }
 
   function jerr(code, message, extra) {
     var e = new Error(message || code);
@@ -637,9 +655,119 @@
     return step();
   }
 
+  /* ---------- 缓存 / 限额 / 冷却 ----------
+   * 三者都在「要不要发那次请求」这一层，顺序不能乱：
+   *   缓存命中 → 直接回（既省钱又不该被限额拦住）
+   *   冷却中   → E_COOLDOWN（连权重都没恢复，发了也是 429）
+   *   达上限   → E_LIMIT_DAY（只挡自动判定，用户可手动放行一次）
+   *
+   * 全部走 global.X 现取而不是模块顶部取：测试里注入的桩要能生效，
+   * service worker 也可能因为 importScripts 顺序而晚于本文件就绪。
+   */
+  function readCache(jobKey, profileId, cacheKey, jdChars, input) {
+    var DB = global.JR_DB;
+    if (!cacheKey || input.force || input.noCache) return Promise.resolve(null);
+    if (!DB || !DB.getVerdict) return Promise.resolve(null);
+
+    return DB.getVerdict(jobKey, profileId).then(function (rec) {
+      if (!rec || !rec.grade) return null;
+      /* cacheKey 已经含 profileVersion / promptVersion / model / jdHash，
+         再比一次 JD 长度：jdHash 只取前 800 字，长 JD 的中段改动它看不出来。 */
+      if (rec.cacheKey !== cacheKey) return null;
+      if (typeof rec.jdChars === 'number' && rec.jdChars !== jdChars) return null;
+
+      var out = merge(rec, {});
+      out.cached = true;
+      out.cacheAgeMs = Math.max(0, Date.now() - (Number(rec.createdAt) || 0));
+      return out;
+    }).catch(function () {
+      return null;   // 库读不出来就当没缓存，不阻断判定
+    });
+  }
+
+  function usedToday() {
+    var DB = global.JR_DB;
+    if (!DB || !DB.getUsage) return Promise.resolve(0);
+    return DB.getUsage(dateKey()).then(function (u) {
+      return Number(u && u.calls) || 0;
+    }).catch(function () {
+      return 0;
+    });
+  }
+
+  /* 429 之后写一次冷却截止时间。失败不影响抛错——
+     最坏情况是用户再撞一次 429，不至于让错误被吞掉。 */
+  function armCooldown(e) {
+    if (!e || e.code !== 'E_RATE_LIMIT') return Promise.resolve();
+    var until = Date.now() + COOLDOWN_MS;
+    e.remainMs = COOLDOWN_MS;
+    e.rateLimitUntil = until;
+
+    var S = global.JR_SETTINGS;
+    try {
+      if (!S || !S.save) return Promise.resolve();
+      var p = S.save({ rateLimitUntil: until });
+      return (p && p.then) ? p.then(function () {}, function () {}) : Promise.resolve();
+    } catch (err) {
+      return Promise.resolve();
+    }
+  }
+
+  /* 证据核对 + 组装结论。核验放在这里而不是面板：
+     落库的结论必须自带核对结果，缓存命中时才不会重新比一遍（也就不会漂）。 */
+  function assembleVerdict(out, ctx) {
+    var V = global.JR_VERDICT;
+    var PR = global.JR_PROMPT;
+    var v = out.verdict;
+
+    v.jobKey = ctx.jobKey;
+    v.profileId = ctx.profile.id;
+    v.profileName = ctx.profile.name;
+    v.profileVersion = ctx.profile.version || 1;
+    v.promptVersion = PR.PROMPT_VERSION;
+    v.model = out.model || ctx.settings.model;
+    v.jdHash = PR.jdHash(ctx.jdText);
+    v.jdChars = ctx.jdText.length;
+    v.cacheKey = ctx.cacheKey || '';
+    v.createdAt = Date.now();
+    v.source = 'model';
+    v.ms = out.ms;
+    v.usage = out.usage;
+    v.cost = estimateCost(ctx.settings, out.usage);
+
+    var check = V.verifyEvidence(v, ctx.jdText);
+    v.evidenceCheck = {
+      checked: check.checked,
+      passed: check.passed,
+      rate: Math.round(check.rate * 100) / 100
+    };
+
+    /* 通过率过低说明模型的"原文引用"大面积是编的，档位本身也可疑。
+       不直接丢弃结论（档位仍可能有价值），而是压低置信度并明确标记，
+       让面板能把它标红——这比静默接受或静默丢弃都诚实。 */
+    var min = typeof V.EVIDENCE_RATE_MIN === 'number' ? V.EVIDENCE_RATE_MIN : 0.5;
+    if (check.checked > 0 && check.rate < min) {
+      v.evidenceFlag = 'E_BAD_EVIDENCE';
+      var c = Number(v.confidence);
+      if (!isFinite(c)) c = 0.5;
+      v.confidence = Math.round(Math.max(0, Math.min(1, c * 0.75)) * 100) / 100;
+      v.score = V.scoreOf(v.grade, v.confidence);
+    }
+
+    return v;
+  }
+
+  function pickProfile(list, wantId) {
+    var i;
+    for (i = 0; i < list.length; i++) if (list[i].id === wantId) return list[i];
+    return list.length ? list[0] : null;
+  }
+
   /* 完整判定。input:
-   *   { jobKey, fields, sources, jdText, profileId, onDelta, signal }
-   * 返回带元信息的 verdict（档位、分数、证据、模型、token、耗时、jdHash）。 */
+   *   { jobKey, fields, sources, jdText, profileId, onDelta, signal,
+   *     force, allowOverLimit, noCache }
+   * 返回带元信息的 verdict（档位、分数、证据、模型、token、耗时、jdHash、
+   * cacheKey、evidenceCheck）；命中缓存时额外带 cached / cacheAgeMs。 */
   function judgeJob(input) {
     input = input || {};
     var S = global.JR_SETTINGS;
@@ -651,59 +779,79 @@
       return Promise.reject(jerr('E_INTERNAL', '提示词或结论模块未加载'));
     }
 
+    var jdText = String(input.jdText == null ? '' : input.jdText);
+    var jobKey = input.jobKey || '';
+
     return Promise.all([S.get(), P.list()]).then(function (r) {
       var settings = r[0];
-      var list = r[1] || [];
-
-      var wantId = input.profileId || settings.lastProfileId;
-      var profile = null;
-      for (var i = 0; i < list.length; i++) if (list[i].id === wantId) { profile = list[i]; break; }
-      if (!profile && list.length) profile = list[0];
+      var profile = pickProfile(r[1] || [], input.profileId || settings.lastProfileId);
 
       if (!profile) {
         return Promise.reject(jerr('E_NO_PROFILE', '还没有判定标准，请先在扩展弹窗里新建一条'));
       }
-      if (!settings.apiKey) {
-        return Promise.reject(jerr('E_NO_KEY', '未配置模型 API'));
-      }
 
-      return hasPermission(settings.baseURL).then(function (ok) {
-        if (!ok) {
-          return Promise.reject(jerr(
-            'E_NO_PERM',
-            '未授权访问 ' + global.JR_SETTINGS.originOf(settings.baseURL),
-            { origin: global.JR_SETTINGS.originOf(settings.baseURL) }
-          ));
+      var cacheKey = (jobKey && PR.cacheKey)
+        ? PR.cacheKey({ jobKey: jobKey, profile: profile, model: settings.model, jdText: jdText })
+        : '';
+
+      return readCache(jobKey, profile.id, cacheKey, jdText.length, input).then(function (hit) {
+        if (hit) return hit;
+
+        if (!settings.apiKey) {
+          return Promise.reject(jerr('E_NO_KEY', '未配置模型 API'));
         }
 
-        var fields = input.fields || {};
-        var messages = PR.buildMessages({
-          profile: profile,
-          fields: fields,
-          sources: input.sources || fields.sources || {},
-          jdText: input.jdText
-        });
+        return hasPermission(settings.baseURL).then(function (ok) {
+          if (!ok) {
+            throw jerr(
+              'E_NO_PERM',
+              '未授权访问 ' + global.JR_SETTINGS.originOf(settings.baseURL),
+              { origin: global.JR_SETTINGS.originOf(settings.baseURL) }
+            );
+          }
 
-        return runAttempts({
-          settings: settings,
-          messages: messages,
-          onDelta: input.onDelta,
-          signal: input.signal
-        }).then(function (out) {
-          var v = out.verdict;
-          v.jobKey = input.jobKey || '';
-          v.profileId = profile.id;
-          v.profileName = profile.name;
-          v.profileVersion = profile.version || 1;
-          v.promptVersion = PR.PROMPT_VERSION;
-          v.model = out.model || settings.model;
-          v.jdHash = PR.jdHash(input.jdText);
-          v.createdAt = Date.now();
-          v.source = 'model';
-          v.ms = out.ms;
-          v.usage = out.usage;
-          v.cost = estimateCost(settings, out.usage);
-          return v;
+          var now = Date.now();
+          if (!input.allowOverLimit && Number(settings.rateLimitUntil) > now) {
+            throw jerr('E_COOLDOWN', '触发限流后冷却中，请稍后再试', {
+              remainMs: Number(settings.rateLimitUntil) - now,
+              rateLimitUntil: Number(settings.rateLimitUntil)
+            });
+          }
+
+          return usedToday().then(function (used) {
+            var limit = Number(settings.dailyLimit);
+            if (!input.allowOverLimit && limit > 0 && used >= limit) {
+              throw jerr(
+                'E_LIMIT_DAY',
+                '今日已调用 ' + used + ' 次，达到上限 ' + limit,
+                { used: used, limit: limit }
+              );
+            }
+
+            var messages = PR.buildMessages({
+              profile: profile,
+              fields: input.fields || {},
+              sources: input.sources || (input.fields && input.fields.sources) || {},
+              jdText: jdText
+            });
+
+            return runAttempts({
+              settings: settings,
+              messages: messages,
+              onDelta: input.onDelta,
+              signal: input.signal
+            }).then(function (out) {
+              return assembleVerdict(out, {
+                jobKey: jobKey,
+                profile: profile,
+                settings: settings,
+                jdText: jdText,
+                cacheKey: cacheKey
+              });
+            }, function (e) {
+              return armCooldown(e).then(function () { throw e; });
+            });
+          });
         });
       });
     });
@@ -723,7 +871,10 @@
     pickContent: pickContent,
     pickReasoning: pickReasoning,
     emptyInfo: emptyInfo,
+    dateKey: dateKey,
+    monthKey: monthKey,
     EMPTY_TEXT: EMPTY_TEXT,
+    COOLDOWN_MS: COOLDOWN_MS,
     jerr: jerr,
     CHAT_PATH: CHAT_PATH
   };

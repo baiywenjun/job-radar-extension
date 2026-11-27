@@ -101,6 +101,16 @@ function makePort() {
 }
 
 let publicCalls = 0;
+let disclosurePosts = 0;
+
+/* SETTINGS_PUBLIC 的内容会随场景变：外发确认、当日用量都是判定前的门槛，
+   测试要能分别构造这几种状态。 */
+let publicSettings = {
+  model: 'deepseek-chat', hasKey: true, autoJudge: true,
+  dailyLimit: 100, dailyUsed: 3,
+  baseOrigin: 'https://api.deepseek.com',
+  disclosureAccepted: true, coolingUntil: 0
+};
 
 w.chrome = {
   runtime: {
@@ -111,10 +121,16 @@ w.chrome = {
         publicCalls++;
         cb({
           ok: true,
-          settings: { model: 'deepseek-chat', hasKey: true, autoJudge: true, dailyLimit: 100, dailyUsed: 3 },
+          settings: Object.assign({}, publicSettings),
           active: { id: 'p1', name: 'FDE', version: 3 },
           profiles: [{ id: 'p1', name: 'FDE', version: 3 }, { id: 'p2', name: 'AI应用', version: 1 }]
         });
+        return;
+      }
+      if (msg.type === 'DISCLOSURE_ACCEPT') {
+        disclosurePosts++;
+        publicSettings.disclosureAccepted = true;
+        cb({ ok: true, disclosureAccepted: true });
         return;
       }
       if (msg.type === 'QUERY_ONE') { cb({ record: null }); return; }
@@ -143,6 +159,11 @@ w.chrome = {
 function panelText() {
   const host = w.document.getElementById('jr-radar-host');
   return host && host.shadowRoot ? host.shadowRoot.textContent : '';
+}
+
+function shadow() {
+  const host = w.document.getElementById('jr-radar-host');
+  return host ? host.shadowRoot : null;
 }
 
 function baseVerdict(over) {
@@ -190,6 +211,7 @@ async function main() {
   await wait(30);
   check('收到增量后显示已收字数',
     /已收 480 字/.test(panelText()), panelText().slice(-120));
+  check('判定中显示进度条', !!(shadow() && shadow().querySelector('.jr-prog')));
 
   /* ---- 3. 结论回来：面板换成模型结果 ---- */
   p0.emit({ type: 'DONE', verdict: baseVerdict() });
@@ -271,6 +293,76 @@ async function main() {
       t4.indexOf('大模型平台工程师') !== -1, t4.slice(0, 200));
     check('底部写明失败原因',
       /判定：本地规则（模型失败：API Key 无效或权限不足）/.test(t4), t4.slice(-160));
+  }
+
+  /* ---- 8. 缓存结论：底部必须说明这次没花钱 ---- */
+  detail.innerHTML = detailInner('Agent 交付工程师', '30-45K',
+    JD_B + ' 另外负责客户侧 Agent 上线与效果归因。');
+  await wait(900);
+  const p4 = ports[ports.length - 1];
+  check('第八个岗位开了端口', !!p4 && ports.length === 5, String(ports.length));
+  if (p4) {
+    p4.emit({
+      type: 'DONE',
+      verdict: baseVerdict({ cached: true, cacheAgeMs: 3 * 60 * 1000, cost: 0.0021 })
+    });
+    await wait(60);
+    check('缓存结论底部标「缓存」',
+      /判定：缓存 · 3 分钟前/.test(panelText()), panelText().slice(-160));
+    check('缓存结论不再显示模型耗时',
+      !/4\.2s/.test(panelText().slice(-160)), panelText().slice(-160));
+  }
+
+  /* ---- 9. 首次外发确认：没同意之前一个请求都不发 ---- */
+  publicSettings.disclosureAccepted = false;
+  const before9 = ports.length;
+  detail.innerHTML = detailInner('知识库工程师', '25-35K',
+    JD_A + ' 另外负责知识库内容治理与权限梳理。');
+  await wait(900);
+
+  check('未同意外发时不开端口', ports.length === before9, String(ports.length));
+  check('面板出现外发确认卡', panelText().indexOf('首次把岗位内容发给模型') !== -1,
+    panelText().slice(0, 200));
+  check('确认卡写明目标域名', panelText().indexOf('api.deepseek.com') !== -1);
+  check('确认卡写明不脱敏', panelText().indexOf('不脱敏') !== -1);
+  check('底部写明等待确认',
+    /判定：本地规则（等待确认外发）/.test(panelText()), panelText().slice(-160));
+
+  const accept = shadow() && shadow().querySelector('[data-act="accept-disclosure"]');
+  check('确认卡上有「同意并开始判定」按钮', !!accept);
+  if (accept) {
+    accept.click();
+    await wait(120);
+    check('点同意后写了一次外发标记', disclosurePosts === 1, String(disclosurePosts));
+    check('点同意后才建立端口', ports.length === before9 + 1, String(ports.length));
+    const pA = ports[ports.length - 1];
+    const startA = pA.sent.filter((m) => m.type === 'START')[0];
+    check('同意后的 START 不带放行标记', !!(startA && !startA.allowOverLimit));
+  }
+
+  /* ---- 10. 每日上限：只停自动判定，且能手動放行 ---- */
+  publicSettings.dailyUsed = 100;
+  publicSettings.dailyLimit = 100;
+  const before10 = ports.length;
+  detail.innerHTML = detailInner('推理平台工程师', '35-50K',
+    JD_B + ' 另外负责推理网关的容量规划与成本优化。');
+  await wait(900);
+
+  check('达上限时不开端口', ports.length === before10, String(ports.length));
+  check('底部写明今日已达上限',
+    /今日已达上限 100\/100/.test(panelText()), panelText().slice(-170));
+  check('超限时仍显示岗位与规则结果',
+    panelText().indexOf('推理平台工程师') !== -1, panelText().slice(0, 160));
+
+  const forceBtn = shadow() && shadow().querySelector('[data-act="force-judge"]');
+  check('面板出现「手动放行一次」按钮', !!forceBtn);
+  if (forceBtn) {
+    forceBtn.click();
+    await wait(120);
+    check('手动放行后建立端口', ports.length === before10 + 1, String(ports.length));
+    const pB = ports[ports.length - 1];
+    const startB = pB.sent.filter((m) => m.type === 'START')[0];
+    check('放行的 START 带 allowOverLimit', !!(startB && startB.allowOverLimit === true));
   }
 
   console.log('\n结果：通过 ' + pass + ' / 失败 ' + fail);

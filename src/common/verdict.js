@@ -187,6 +187,84 @@
     return normalize(obj);
   }
 
+  /* ---------- 证据逐字校验 ----------
+   * 模型编造原文比"判错"危害大得多：用户会把它当权威。
+   * 做法是把 JD 与 quote 都归一化后做子串比对，任何一处对不上就标灰。
+   *
+   * 归一化要处理的真实差异：
+   *   - 抽取的 JD 里有换行、连续空格、全角空格、零宽字符（BOSS 的私用区字形也会带）
+   *   - 模型复制时把全角标点换成半角，或把弯引号换成直引号
+   *   - 模型把长句中间省略成 "…"，这是可接受的，按段比对
+   */
+  var MIN_QUOTE = 4;
+  var EVIDENCE_RATE_MIN = 0.5;
+
+  function normalizeText(s) {
+    return String(s == null ? '' : s)
+      .replace(/[\u00ad\u200b-\u200d\uFEFF]/g, '')
+      .replace(/[\uFF01-\uFF5E]/g, function (ch) {
+        return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0);
+      })
+      .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+      .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+      .replace(/[\s\u3000]+/g, '')
+      .toLowerCase();
+  }
+
+  function quoteMatches(quote, hay) {
+    var q = normalizeText(quote);
+    if (!q || q.length < MIN_QUOTE) return false;
+    if (hay.indexOf(q) >= 0) return true;
+    /* 省略式引用：两段以上、每段都不短于 MIN_QUOTE，则逐段核对 */
+    var parts = q.split(/\.{2,}|\u2026+/).filter(function (x) {
+      return x.length >= MIN_QUOTE;
+    });
+    if (parts.length >= 2) {
+      for (var i = 0; i < parts.length; i++) {
+        if (hay.indexOf(parts[i]) < 0) return false;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  /* 就地写入 verified。没有 quote 或 quote 过短的条目不算"编造"，
+     算"没给出可核对的依据"，用 noQuote 区分——两者的处理不该一样。 */
+  function verifyEvidence(v, jdText) {
+    var list = (v && v.evidence) || [];
+    var hay = normalizeText(jdText);
+    var checked = 0;
+    var passed = 0;
+
+    for (var i = 0; i < list.length; i++) {
+      var e = list[i];
+      var q = String((e && e.quote) || '');
+      if (!q || normalizeText(q).length < MIN_QUOTE) {
+        e.verified = false;
+        e.noQuote = true;
+        continue;
+      }
+      checked++;
+      var ok = quoteMatches(q, hay);
+      e.verified = ok;
+      e.noQuote = false;
+      if (ok) passed++;
+    }
+
+    return {
+      checked: checked,
+      passed: passed,
+      rate: checked ? passed / checked : 0
+    };
+  }
+
+  function chipNote(e) {
+    if (e.verified === false) {
+      return e.noQuote ? '未附原文引用，无法核对' : '未能核实：JD 原文里找不到这段引用';
+    }
+    return e.quote ? '原文：' + e.quote : '';
+  }
+
   /* 面板适配层：输出必须与 rules.evaluate() 的返回值同构，
      否则 panel.js 要开始区分两种数据源，迟早出错。
      族群 / flags 仍取规则引擎的结果——模型的契约里没有词库概念。 */
@@ -198,13 +276,23 @@
     var strong = (v.evidence || [])
       .filter(function (e) { return e.type === 'must' || e.type === 'nice'; })
       .map(function (e) {
-        return { term: e.claim, note: e.quote ? '原文：' + e.quote : '', type: e.type };
+        return {
+          term: e.claim,
+          note: chipNote(e),
+          type: e.type,
+          unverified: e.verified === false
+        };
       });
 
     var weak = (v.evidence || [])
       .filter(function (e) { return e.type === 'red'; })
       .map(function (e) {
-        return { term: e.claim, note: e.quote ? '原文：' + e.quote : '', type: 'red' };
+        return {
+          term: e.claim,
+          note: chipNote(e),
+          type: 'red',
+          unverified: e.verified === false
+        };
       })
       .concat((v.risks || []).map(function (x) {
         return { term: x, note: '', type: 'risk' };
@@ -230,6 +318,8 @@
       experience: r.experience,
       salary: r.salary,
       missing: v.missing || [],
+      /* 证据核验统计随面板数据一起走：面板只负责显示，不重新比一遍 */
+      evidenceCheck: v.evidenceCheck || null,
       modelMode: true
     };
   }
@@ -258,8 +348,13 @@
     scoreOf: scoreOf,
     gradeMeta: gradeMeta,
     extractObject: extractObject,
+    normalizeText: normalizeText,
+    quoteMatches: quoteMatches,
+    verifyEvidence: verifyEvidence,
     GRADES: GRADES,
     LEVEL: LEVEL,
-    FALLBACK: FALLBACK
+    FALLBACK: FALLBACK,
+    MIN_QUOTE: MIN_QUOTE,
+    EVIDENCE_RATE_MIN: EVIDENCE_RATE_MIN
   };
 })(typeof self !== 'undefined' ? self : globalThis);

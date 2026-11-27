@@ -267,6 +267,89 @@ check('判定失败写明错误码与原因',
 check('判定失败不弹诊断卡（仍显示岗位面板）',
   shadow().querySelector('.jr-grade') !== null);
 
+/* ---------- 6.5 成本、缓存、证据可信度、额度 ---------- */
+const dA = makeData({
+  judge: { status: 'done', model: 'deepseek-chat', ms: 4200, usage: { total: 1700 }, cost: 0.0021 }
+});
+P.show(dA, handlers);
+check('底部显示单次花费', /¥0\.0021/.test(panelText()), panelText().slice(-140));
+
+const dB = makeData({
+  judge: { status: 'done', model: 'deepseek-chat', cached: true, cacheAgeMs: 5 * 60000 }
+});
+P.show(dB, handlers);
+check('缓存结论底部标「缓存 · 5 分钟前」',
+  /判定：缓存 · 5 分钟前/.test(panelText()), panelText().slice(-140));
+check('缓存结论不再显示 token 与耗时',
+  !/tokens/.test(panelText().slice(-170)), panelText().slice(-170));
+
+/* 未核实的证据：chip 标灰，title 必须说清"为什么灰" */
+const dC = makeData({
+  ev: modelEv({
+    strong: [
+      { term: '私有化推理', note: '原文：基于 vLLM 搭建私有化推理服务', type: 'must', unverified: false },
+      { term: '集群运维', note: '未能核实：JD 原文里找不到这段引用', type: 'must', unverified: true }
+    ],
+    evidenceCheck: { checked: 2, passed: 1, rate: 0.5 }
+  })
+});
+P.show(dC, handlers);
+const unv = shadow().querySelectorAll('.jr-chip.unv');
+check('未核实的证据 chip 带 unv 类', unv.length === 1, String(unv.length));
+check('未核实 chip 的 title 以「未能核实」开头',
+  unv.length === 1 && String(unv[0].getAttribute('title')).indexOf('未能核实') === 0,
+  unv.length ? String(unv[0].getAttribute('title')) : '无');
+check('通过率恰好 0.5 时不出红条',
+  panelText().indexOf('证据未能核实') === -1, panelText().slice(0, 260));
+
+const dD = makeData({
+  ev: modelEv({
+    strong: [{ term: '私有化推理', note: '原文：…', type: 'must', unverified: true }],
+    evidenceCheck: { checked: 3, passed: 1, rate: 0.33 }
+  })
+});
+P.show(dD, handlers);
+check('通过率低于 0.5 时出现红条',
+  panelText().indexOf('证据未能核实') !== -1, panelText().slice(0, 300));
+check('红条写明有几段找不到',
+  panelText().indexOf('有 2 段') !== -1, panelText().slice(0, 300));
+
+/* 超限与冷却：主按钮换成手动放行 */
+const dE = makeData({
+  verdict: null,
+  ev: modelEv({ modelMode: false }),
+  judge: { status: 'limited', reason: 'day', used: 100, limit: 100 }
+});
+P.show(dE, handlers);
+check('超限底部写明上限',
+  /判定：本地规则（今日已达上限 100\/100）/.test(panelText()), panelText().slice(-170));
+check('超限时出现「手动放行一次」', !!shadow().querySelector('[data-act="force-judge"]'));
+check('超限时说明仍在显示本地规则',
+  panelText().indexOf('下面显示的是本地词库结果') !== -1);
+
+const dF = makeData({
+  verdict: null,
+  ev: modelEv({ modelMode: false }),
+  judge: { status: 'limited', reason: 'cooldown', remainMs: 4 * 60000 }
+});
+P.show(dF, handlers);
+check('冷却底部写明剩余时间',
+  /判定：本地规则（限流冷却中，剩 4 分）/.test(panelText()), panelText().slice(-170));
+check('冷却时也提供手动放行', !!shadow().querySelector('[data-act="force-judge"]'));
+
+/* 外发确认卡 */
+const dG = makeData({
+  verdict: null,
+  ev: modelEv({ modelMode: false }),
+  judge: { status: 'disclosure', origin: 'https://api.deepseek.com', jdChars: 1863 }
+});
+P.show(dG, handlers);
+check('外发确认卡写明 JD 字数', panelText().indexOf('1863 字') !== -1);
+check('外发确认卡写明目标域名', panelText().indexOf('api.deepseek.com') !== -1);
+check('外发确认卡有同意按钮', !!shadow().querySelector('[data-act="accept-disclosure"]'));
+check('外发确认底部说明在等确认',
+  /判定：本地规则（等待确认外发）/.test(panelText()), panelText().slice(-170));
+
 /* ---------- 7. 局部刷新不重建宿主 ---------- */
 const hostBefore = w.document.getElementById('jr-radar-host');
 const d10 = makeData();

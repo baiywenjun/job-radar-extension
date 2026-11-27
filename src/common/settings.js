@@ -28,7 +28,11 @@
     lastProfileId: '',
     promptVersion: 1,
     jsonModeSupported: true,
-    disclosureAccepted: false
+    disclosureAccepted: false,
+    /* 429 之后的冷却截止时间（epoch ms）。放在设置里而不是内存变量：
+       MV3 的 service worker 随时休眠，内存里的冷却会被悄悄清掉，
+       用户就会在限流期间反复撞 429。 */
+    rateLimitUntil: 0
   };
 
   /* 这些字段必须落在 DEFAULTS 里，否则 get() 补不齐 */
@@ -152,6 +156,7 @@
     out.disclosureAccepted = !!out.disclosureAccepted;
     out.lastProfileId = String(out.lastProfileId || '').trim();
     out.promptVersion = Number(out.promptVersion) || DEFAULTS.promptVersion;
+    out.rateLimitUntil = Math.max(0, Number(out.rateLimitUntil) || 0);
 
     for (k in NUM_RANGE) {
       if (!Object.prototype.hasOwnProperty.call(NUM_RANGE, k)) continue;
