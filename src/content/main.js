@@ -14,6 +14,7 @@
   var A = window.JR_ADAPTERS;
   var P = window.JR_PANEL;
   var D = window.JR_DIAGNOSE;
+  var V = window.JR_VERDICT;
 
   var adapter = null;
   var lastFingerprint = '';
@@ -29,6 +30,12 @@
   var runTimer = null;
   var observer = null;
 
+  /* ---------- 模型判定状态 ---------- */
+  var cfg = null;           // SETTINGS_PUBLIC 的返回：能不能判定、用哪条标准
+  var current = null;       // 当前面板数据，用来判断异步回包是否已过期
+  var port = null;          // 判定端口，同一时刻只允许一个
+  var judgeSeq = 0;         // 每次判定自增；旧回包凭它被丢弃
+
   /* 依赖缺失不能静默 return，否则用户只看到「插件没反应」，无从排查 */
   var missing = [];
   if (!U) missing.push('util.js');
@@ -36,6 +43,7 @@
   if (!E) missing.push('extract.js');
   if (!A) missing.push('adapters.js');
   if (!P) missing.push('panel.js');
+  if (!V) missing.push('verdict.js');
   /* diagnose.js 缺失只影响「复制诊断」按钮，不影响抽取与打分，不列入致命依赖 */
   if (missing.length) {
     console.error(TAG + ' 依赖脚本未加载：' + missing.join('、') +
@@ -88,6 +96,13 @@
       jdLength: ev.jdLength,
       jdExcerpt: U.ellipsis(f.jdText, 600),
       url: f.url,
+      /* 存"用户看到的那份结论"：模型跑成功就存模型档位，否则存规则档位。
+         两者必须能区分，否则以后回看分不清结论是谁给的。 */
+      judgeSource: d.verdict ? 'model' : 'rules',
+      modelGrade: d.verdict ? d.verdict.grade : '',
+      modelScore: d.verdict ? d.verdict.score : null,
+      oneLine: d.verdict ? d.verdict.oneLine : '',
+      profileName: d.verdict ? (d.verdict.profileName || '') : '',
       savedAt: Date.now()
     };
     // 刻意不写入招聘者姓名 / 联系方式等个人信息
@@ -107,6 +122,10 @@
     lines.push('| 经验 | ' + (f.experienceText || '—') + ' |');
     lines.push('| 族群 | ' + (ev.groupLabel || '—') + ' |');
     lines.push('| 评分 | ' + ev.score + ' / ' + ev.gradeLabel + ' |');
+    lines.push('| 判定来源 | ' + (d.verdict
+      ? '模型 ' + (d.verdict.model || '') + (d.verdict.profileName ? ' · ' + d.verdict.profileName : '')
+      : '本地规则') + ' |');
+    if (d.verdict && d.verdict.oneLine) lines.push('| 结论 | ' + d.verdict.oneLine + ' |');
     lines.push('');
     lines.push('**强信号**：' + (ev.strong.map(function (x) { return x.term; }).join('、') || '无'));
     lines.push('');
@@ -173,12 +192,218 @@
       onSave: onSave,
       onCopy: onCopy,
       onDiag: onDiag,
+      onSwitchProfile: onSwitchProfile,
       onReextract: function () {
         lastFingerprint = '';
         retry = 0;
         run(true);
       }
     };
+  }
+
+  /* ---------- 模型判定链路 ----------
+   * 顺序刻意是「先出规则结果，再异步换模型结论」：
+   * 规则结果是本地的、毫秒级，模型要 3–8 秒。让面板先有内容再看它被刷新，
+   * 比转 8 秒空圈体验好，也保证 Key 没配/断网时用户仍有东西可看。
+   */
+  function loadConfig() {
+    return new Promise(function (resolve) {
+      try {
+        if (!chrome.runtime || !chrome.runtime.sendMessage) { resolve(null); return; }
+        chrome.runtime.sendMessage({ type: 'SETTINGS_PUBLIC' }, function (res) {
+          if (chrome.runtime.lastError) { resolve(null); return; }
+          resolve(res && res.ok ? res : null);
+        });
+      } catch (e) {
+        resolve(null);
+      }
+    });
+  }
+
+  function ensureConfig() {
+    if (cfg) return Promise.resolve(cfg);
+    return loadConfig().then(function (c) {
+      if (c) cfg = c;
+      return cfg;
+    });
+  }
+
+  /* 切换标准：写回 lastProfileId 后必须强制重跑。
+     否则指纹没变，run() 会在比对那一步直接 return，看起来"点了没反应"。 */
+  function onSwitchProfile(id) {
+    if (!id) return;
+    chrome.runtime.sendMessage({ type: 'PROFILE_SET_ACTIVE', id: id }, function (res) {
+      if (chrome.runtime.lastError) return;
+      if (!res || !res.ok) return;
+      if (cfg) cfg.active = res.active;
+      lastFingerprint = '';
+      retry = 0;
+      run(true);
+    });
+  }
+
+  /* 取消在途判定。切换岗位、重抽、进入提示态都必须调用：
+     不取消的话 5 秒连切 3 个岗位就是 3 个请求并发烧钱，
+     而且先返回的旧结论会盖到新岗位的面板上。 */
+  function cancelJudge() {
+    judgeSeq++;
+    if (!port) return;
+    try { port.postMessage({ type: 'ABORT' }); } catch (e) { /* 已断 */ }
+    try { port.disconnect(); } catch (e) { /* 已断 */ }
+    port = null;
+  }
+
+  function startJudgeIfNeeded(data) {
+    current = data;
+    cancelJudge();
+    if (!V) return;
+
+    var s = cfg && cfg.settings;
+    if (!s) {
+      data.judge = { status: 'off', error: '配置读取失败' };
+      P.update();
+      return;
+    }
+    if (!s.hasKey) {
+      data.judge = { status: 'off', error: '未配置模型 API' };
+      P.update();
+      return;
+    }
+    if (!cfg.active) {
+      data.judge = { status: 'no-profile' };
+      P.update();
+      return;
+    }
+    if (!s.autoJudge) {
+      data.judge = { status: 'manual' };
+      P.update();
+      return;
+    }
+    startJudge(data);
+  }
+
+  function startJudge(data) {
+    if (!chrome.runtime || !chrome.runtime.connect) {
+      data.judge = { status: 'off', error: '当前环境不支持模型判定' };
+      P.update();
+      return;
+    }
+
+    var seq = ++judgeSeq;
+    var p;
+    try {
+      p = chrome.runtime.connect({ name: 'jr-judge' });
+    } catch (e) {
+      data.judge = { status: 'failed', code: 'E_PORT', error: '无法连接后台' };
+      P.update();
+      return;
+    }
+    port = p;
+
+    var settled = false;
+    var lastPaint = 0;
+
+    data.judge = {
+      status: 'running',
+      chars: 0,
+      model: (cfg.settings && cfg.settings.model) || '',
+      profileName: cfg.active && cfg.active.name
+    };
+    P.setBusy('模型判定中…');
+
+    function finish(kind, payload) {
+      if (settled) return;
+      settled = true;
+      try { p.disconnect(); } catch (e) { /* 已断 */ }
+      if (port === p) port = null;
+
+      /* 两道过期闸：序号（切了岗位）与对象（面板已换人）。
+         缺任何一道都可能把旧岗位的结论画到新岗位上。 */
+      if (seq !== judgeSeq) return;
+      if (current !== data) return;
+
+      if (kind === 'done') applyVerdict(data, payload);
+      else failJudge(data, payload);
+    }
+
+    p.onMessage.addListener(function (msg) {
+      if (!msg || seq !== judgeSeq) return;
+
+      if (msg.type === 'DELTA') {
+        data.judge.chars = msg.chars;
+        var now = Date.now();
+        if (now - lastPaint < 500) return;   // 面板重绘比流式块慢，必须节流
+        lastPaint = now;
+        P.setBusy('模型判定中 ' + msg.chars + ' 字…');
+        return;
+      }
+      if (msg.type === 'DONE') finish('done', msg.verdict);
+      else if (msg.type === 'FAIL') finish('fail', msg);
+    });
+
+    p.onDisconnect.addListener(function () {
+      if (settled) return;
+      finish('fail', { code: 'E_ABORT', error: '后台连接已断开' });
+    });
+
+    var f = data.fields;
+    p.postMessage({
+      type: 'START',
+      jobKey: data.key,
+      fields: {
+        jobTitle: f.jobTitle,
+        company: f.company,
+        salaryText: f.salaryText,
+        city: f.city,
+        experienceText: f.experienceText,
+        platform: f.platform,
+        siteName: f.siteName,
+        url: f.url
+      },
+      sources: f.sources || {},
+      jdText: f.jdText,
+      profileId: cfg.active.id
+    });
+  }
+
+  function applyVerdict(data, verdict) {
+    if (!verdict || !verdict.grade) {
+      failJudge(data, { code: 'E_BAD_JSON', error: '模型结论为空' });
+      return;
+    }
+    var rulesEv = data.ev;
+    data.verdict = verdict;
+    data.divergence = V.divergence(rulesEv.grade, verdict.grade);
+    data.ev = V.toPanelView(verdict, rulesEv, data.fields);
+    data.judge = {
+      status: 'done',
+      model: verdict.model,
+      ms: verdict.ms,
+      usage: verdict.usage,
+      profileName: verdict.profileName
+    };
+
+    /* 用 show 而不是重建宿主：mount() 会复用现有 host，只换 Shadow DOM 内容 */
+    P.show(data, handlers());
+    console.log(TAG + ' 模型结论 · ' + (data.fields.jobTitle || '未取到职位名') +
+      ' · ' + verdict.gradeLabel + ' ' + verdict.score + ' 分 · ' +
+      verdict.model + ' · ' + verdict.ms + 'ms');
+  }
+
+  function failJudge(data, e) {
+    var code = (e && e.code) || 'E_UNKNOWN';
+
+    /* 被新岗位取消属于正常流程，不是故障，也不该弹任何东西 */
+    if (code === 'E_ABORT') {
+      data.judge = { status: 'manual' };
+      return;
+    }
+
+    data.judge = { status: 'failed', code: code, error: (e && e.error) || code };
+    P.show(data, handlers());
+    /* 内容脚本的 console.warn 会被 Chrome 计入扩展错误面板，这里统一用 info */
+    logOnce('judge-fail:' + code + ':' + location.pathname,
+      '模型判定失败（' + code + '）：' + ((e && e.error) || ''));
   }
 
   /* 把「到底哪个字段空了」说清楚：旧版一律说三个全失败，用户无法判断是改版
@@ -264,6 +489,11 @@
     retry = 0;
 
     if (!ok) {
+      /* 进入提示态就说明当前没有有效岗位，在途判定必须取消：
+         否则几秒后模型结论回来，会把「等待选择岗位」的提示卡顶掉。 */
+      cancelJudge();
+      current = null;
+
       /* 关键分支：必须区分「本页没有岗位详情」与「详情在但抽不到」。
          BOSS 搜索页选中岗位后 URL 也可能仍是 /web/geek/jobs?query=...；
          列表卡片本身就有 .job-title .name 和 .salary，
@@ -323,7 +553,11 @@
     lastIssueKey = '';
     var fp = fingerprint(f);
     if (!force && fp === lastFingerprint) {
-      P.setBusy('');
+      /* 判定进行中不要清 busy：DOM 抖动会高频触发 run，
+         一清就把「模型判定中…」的进度标签抹掉了 */
+      if (!current || !current.judge || current.judge.status !== 'running') {
+        P.setBusy('');
+      }
       return;
     }
     lastFingerprint = fp;
@@ -344,7 +578,10 @@
       ev: ev,
       saved: false,
       seenCount: 0,
-      staleDays: 0
+      staleDays: 0,
+      profiles: (cfg && cfg.profiles) || [],
+      activeProfileId: (cfg && cfg.active && cfg.active.id) || '',
+      activeVersion: (cfg && cfg.active && cfg.active.version) || 0
     };
 
     console.log(TAG + ' 已渲染 · ' + adapter.name + ' · ' + (f.jobTitle || '未取到职位名') +
@@ -352,6 +589,17 @@
 
     P.bind();
     P.show(data, handlers());
+
+    /* 配置是异步取的：首次进页面时可能还没回来。
+       拿到后补上标准下拉所需的数据，再启动模型判定。 */
+    ensureConfig().then(function (c) {
+      if (!c) return;
+      data.profiles = c.profiles || [];
+      data.activeProfileId = c.active ? c.active.id : '';
+      data.activeVersion = c.active ? c.active.version : 0;
+      P.update();
+      startJudgeIfNeeded(data);
+    });
 
     // 查本地库里是否已有记录，有则显示见到次数与挂牌天数
     chrome.runtime.sendMessage({ type: 'QUERY_ONE', key: key }, function (res) {
@@ -437,7 +685,14 @@
     P.bind();          // 先建宿主，避免它的插入触发下面的 DOM 监听
     startObserver();
     setInterval(tick, 1300);
-    scheduleRun(900);
+
+    /* 先把配置取回来再首次渲染：否则第一屏没有标准下拉，
+       而且判定要等配置到了才开始，用户会白等一轮。 */
+    ensureConfig().then(function () {
+      scheduleRun(900);
+    }, function () {
+      scheduleRun(900);
+    });
   }
 
   init();

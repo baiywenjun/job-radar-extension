@@ -1,9 +1,12 @@
 {
   "manifest_version": 3,
   "name": "岗位雷达 · JD 结构化记录仪",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "用你自己的判定标准 + 模型 API 探测岗位真伪，并在本地留存 JD 原文。个人求职辅助工具，不做批量采集。",
-  "permissions": ["storage", "unlimitedStorage"],
+  "permissions": [
+    "storage",
+    "unlimitedStorage"
+  ],
   "host_permissions": [
     "https://*.zhipin.com/*",
     "https://*.maimai.cn/*",
@@ -11,7 +14,9 @@
     "https://*.iguopin.com/*",
     "https://api.deepseek.com/*"
   ],
-  "optional_host_permissions": ["https://*/*"],
+  "optional_host_permissions": [
+    "https://*/*"
+  ],
   "background": {
     "service_worker": "src/background/sw.js"
   },
@@ -29,6 +34,7 @@
         "src/content/adapters.js",
         "src/content/extract.js",
         "src/content/diagnose.js",
+        "src/common/verdict.js",
         "src/content/panel.js",
         "src/content/main.js"
       ],

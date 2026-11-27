@@ -8,6 +8,8 @@
 importScripts(
   '../common/settings.js',
   '../common/profiles.js',
+  '../common/prompt.js',
+  '../common/verdict.js',
   '../common/db.js',
   'judge.js'
 );
@@ -70,11 +72,19 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
   };
   if (PRIVATE[msg.type] && !fromExtensionPage(sender)) return deny(sendResponse);
 
-  /* 内容脚本唯一的设置入口：只给"能不能用、用哪个标准"，不给 Key、不给单价 */
+  /* 内容脚本唯一的设置入口：只给"能不能用、用哪个标准"，不给 Key、不给单价。
+     标准只回 id / 名称 / 版本，不回 requirement 原文——面板要的只是下拉选项。 */
   if (msg.type === 'SETTINGS_PUBLIC') {
-    return reply(Promise.all([S.get(), P.getActive()]).then(function (r) {
+    return reply(Promise.all([
+      S.get(),
+      P.getActive(),
+      JR_DB.getUsage(todayKey()).catch(function () {
+        return { date: todayKey(), calls: 0 };
+      })
+    ]).then(function (r) {
       var s = r[0];
       var a = r[1];
+      var u = r[2] || { calls: 0 };
       return {
         settings: {
           model: s.model,
@@ -82,12 +92,28 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
           autoJudge: s.autoJudge,
           dailyLimit: s.dailyLimit,
           baseOrigin: S.originOf(s.baseURL),
-          dailyUsed: 0
+          dailyUsed: u.calls || 0
         },
         active: a.profile
           ? { id: a.profile.id, name: a.profile.name, version: a.profile.version }
-          : null
+          : null,
+        profiles: (a.list || []).map(function (p) {
+          return { id: p.id, name: p.name, version: p.version };
+        })
       };
+    }), sendResponse);
+  }
+
+  /* 面板里的标准下拉：内容脚本可以切换当前标准，但不涉及 Key 与标准原文，
+     所以不列入 PRIVATE。id 必须真实存在，否则拒绝——避免面板把悬空 id 写进去。 */
+  if (msg.type === 'PROFILE_SET_ACTIVE') {
+    return reply(P.list().then(function (list) {
+      var hit = null;
+      for (var i = 0; i < list.length; i++) if (list[i].id === msg.id) { hit = list[i]; break; }
+      if (!hit) throw new Error('该判定标准不存在');
+      return S.save({ lastProfileId: hit.id }).then(function () {
+        return { active: { id: hit.id, name: hit.name, version: hit.version } };
+      });
     }), sendResponse);
   }
 
@@ -219,6 +245,93 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
   if (msg.type === 'CLEAR_VERDICTS') {
     return reply(JR_DB.clearVerdicts().then(function () { return {}; }), sendResponse);
   }
+});
+
+/* ---------- 判定端口 ----------
+ * 为什么用长连接而不是 sendMessage：
+ *   1. 流式增量要持续回推，sendMessage 是一次性的；
+ *   2. 内容脚本 disconnect 就等于取消，切换岗位时旧请求必须立刻停，
+ *      否则 5 秒连切 3 个岗位就是 3 个请求并发烧钱，且先返回的旧结论会盖掉新岗位。
+ */
+var RETRYABLE = {
+  E_TIMEOUT: 1,
+  E_NETWORK: 1,
+  E_BAD_JSON: 1,
+  E_RATE_LIMIT: 1
+};
+
+function persistVerdict(v, date) {
+  return JR_DB.putVerdict(v).then(function () {
+    return JR_DB.bumpUsage(date, {
+      calls: 1,
+      inTokens: (v.usage && v.usage.in) || 0,
+      outTokens: (v.usage && v.usage.out) || 0,
+      cost: v.cost || 0
+    });
+  });
+}
+
+chrome.runtime.onConnect.addListener(function (port) {
+  if (port.name !== 'jr-judge') return;
+
+  var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  var closed = false;
+  var running = false;
+
+  function post(msg) {
+    if (closed) return;
+    try {
+      port.postMessage(msg);
+    } catch (e) {
+      closed = true;   // 端口已断，后续回推不再尝试
+    }
+  }
+
+  port.onDisconnect.addListener(function () {
+    closed = true;
+    if (ctrl) {
+      try { ctrl.abort(); } catch (e) { /* noop */ }
+    }
+  });
+
+  port.onMessage.addListener(function (msg) {
+    if (!msg || msg.type !== 'START' || running) return;
+    running = true;
+
+    var lastDelta = 0;
+
+    J.judgeJob({
+      jobKey: msg.jobKey,
+      fields: msg.fields,
+      sources: msg.sources,
+      jdText: msg.jdText,
+      profileId: msg.profileId,
+      signal: ctrl ? ctrl.signal : null,
+      onDelta: function (chars) {
+        /* 节流：流式块可能几十毫秒一个，直接透传会让面板高频重绘 */
+        var now = Date.now();
+        if (now - lastDelta < 300) return;
+        lastDelta = now;
+        post({ type: 'DELTA', chars: chars });
+      }
+    }).then(function (verdict) {
+      post({ type: 'DONE', verdict: verdict });
+      return persistVerdict(verdict, todayKey()).catch(function () {
+        /* 落库失败不影响这次结论的展示 */
+      });
+    }).catch(function (e) {
+      var code = (e && e.code) || 'E_UNKNOWN';
+      post({
+        type: 'FAIL',
+        code: code,
+        error: String((e && e.message) || e || '未知错误'),
+        detail: (e && e.detail) || '',
+        retryable: RETRYABLE[code] === 1
+      });
+    }).then(function () {
+      running = false;
+    });
+  });
 });
 
 chrome.runtime.onInstalled.addListener(function (details) {

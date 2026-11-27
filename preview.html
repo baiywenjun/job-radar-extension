@@ -1820,7 +1820,7 @@
         return global.chrome.runtime.getManifest().version;
       }
     } catch (e) { /* 非扩展环境 */ }
-    return '0.2.0';
+    return '0.2.1';
   })();
 
   function brand() {
@@ -1894,6 +1894,7 @@
 .jr-chip.g{background:var(--goodbg);border-color:var(--goodline);color:var(--good)}
 .jr-chip.n{background:var(--accentbg);border-color:var(--accentline);color:var(--accent)}
 .jr-chip.b{background:var(--badbg);border-color:var(--badline);color:var(--bad)}
+.jr-chip.miss{background:#fbfbfd;border-color:#e5e9f2;color:#9aa5b6;border-style:dashed}
 .jr-empty{font-size:11.5px;color:#aab3c2}
 
 .jr-note{font-size:11px;color:var(--ink3);background:#fff8ef;border:1px solid var(--soft);
@@ -1901,6 +1902,14 @@
 .jr-note b{color:var(--ink2)}
 .jr-note.warn{background:var(--warnbg);border-color:var(--warnline);color:var(--warn)}
 .jr-note.bad{background:var(--badbg);border-color:var(--badline);color:var(--bad)}
+
+.jr-std{display:flex;align-items:center;gap:7px;padding:6px 13px;background:#fff8ef;
+  border-bottom:1px solid var(--line);font-size:11px;color:var(--ink3);flex:0 0 auto}
+.jr-std .k{white-space:nowrap}
+.jr-std select{flex:1;min-width:0;font-family:inherit;font-size:11.5px;color:var(--ink2);
+  border:1px solid var(--line);background:#fff;border-radius:5px;padding:2px 4px;cursor:pointer}
+.jr-std select:focus{outline:none;border-color:var(--accent)}
+.jr-std .v{font-size:10px;color:#9aa5b6;white-space:nowrap}
 
 .jr-foot{display:flex;gap:7px;padding:11px 13px;border-top:1px solid var(--soft);background:#fff6eb;flex:0 0 auto}
 .jr-btn{flex:1;padding:8px 10px;border-radius:7px;border:1px solid var(--line);background:#fff;
@@ -2047,6 +2056,46 @@
     );
   }
 
+  function fmtTokens(n) {
+    var v = Number(n) || 0;
+    return v >= 1000 ? (v / 1000).toFixed(1) + 'k' : String(v);
+  }
+
+  /* 底部必须说清"现在看到的结论是谁给的"。任何降级都要写明原因，
+     否则用户会把本地词库的分数当成模型判断——这是本工具最容易误导人的地方。 */
+  function judgeLabel(d) {
+    var j = d.judge || {};
+    if (j.status === 'running') {
+      return '模型判定中…' + (j.chars ? ' 已收 ' + j.chars + ' 字' : '');
+    }
+    if (j.status === 'done') {
+      var parts = ['模型 ' + (j.model || '')];
+      if (j.usage && j.usage.total) parts.push(fmtTokens(j.usage.total) + ' tokens');
+      if (j.ms) parts.push((j.ms / 1000).toFixed(1) + 's');
+      return parts.join(' · ');
+    }
+    if (j.status === 'failed') return '本地规则（模型失败：' + (j.error || j.code || '未知') + '）';
+    if (j.status === 'off') return '本地规则（' + (j.error || '未配置模型 API') + '）';
+    if (j.status === 'manual') return '本地规则（自动判定已关闭）';
+    if (j.status === 'no-profile') return '本地规则（未设置判定标准）';
+    return '本地规则';
+  }
+
+  /* 标准切换条：只有 ≥2 条标准时才出现，单标准用户不该看见一个只有一个选项的下拉 */
+  function stdBar(d) {
+    if (!d.profiles || d.profiles.length < 2) return '';
+    var opts = d.profiles.map(function (p) {
+      return '<option value="' + esc(p.id) + '"' +
+        (p.id === d.activeProfileId ? ' selected' : '') + '>' +
+        esc(p.name) + '</option>';
+    }).join('');
+    return '<div class="jr-std">' +
+      '<span class="k">判定标准</span>' +
+      '<select data-act="profile" title="切换后会自动重新判定">' + opts + '</select>' +
+      (d.activeVersion ? '<span class="v">v' + esc(d.activeVersion) + '</span>' : '') +
+      '</div>';
+  }
+
   function render() {
     if (!lastData) return;
     var d = lastData;
@@ -2054,6 +2103,10 @@
     var ev = d.ev;
     var src = f.sources || {};
     var color = gradeColor(ev.grade);
+    var modelMode = !!ev.modelMode;
+
+    /* 模型给了 oneLine 就用它替换套话描述；没给（规则模式）保持原样 */
+    var gdesc = (d.verdict && d.verdict.oneLine) ? d.verdict.oneLine : ev.gradeDesc;
 
     var tags = [];
 
@@ -2066,22 +2119,41 @@
     if (ev.flags.indexOf('participateOnly') >= 0) tags.push('<span class="jr-tag w">职责模糊</span>');
     if (d.staleDays >= 30) tags.push('<span class="jr-tag w">已挂牌 ' + d.staleDays + ' 天</span>');
 
+    /* 模型模式下 chip 的 title 是原文引用，方便一眼核对是否真在 JD 里 */
     var strongChips = ev.strong.length
-      ? ev.strong.map(function (x) { return '<span class="jr-chip g">' + esc(x.term) + '</span>'; }).join('')
-      : '<span class="jr-empty">未命中具体技术栈词</span>';
+      ? ev.strong.map(function (x) {
+          var cls = x.type === 'nice' ? 'n' : 'g';
+          return '<span class="jr-chip ' + cls + '"' +
+            (x.note ? ' title="' + esc(x.note) + '"' : '') + '>' + esc(x.term) + '</span>';
+        }).join('')
+      : '<span class="jr-empty">' + (modelMode ? '模型未给出支持证据' : '未命中具体技术栈词') + '</span>';
 
-    var actionChips = ''
-      .concat(ev.actions.length ? ev.actions.map(function (x) { return '<span class="jr-chip n">' + esc(x.term) + '</span>'; }).join('') : '')
-      .concat(ev.metrics.length ? ev.metrics.map(function (x) { return '<span class="jr-chip n">' + esc(x.term) + '</span>'; }).join('') : '');
-    if (!actionChips) actionChips = '<span class="jr-empty">未命中建设动作或工程指标</span>';
+    var actionChips;
+    if (modelMode) {
+      /* 模型不产出「建设动作 / 工程指标」，这个区块改放它点出的未提及项 */
+      actionChips = (ev.missing && ev.missing.length)
+        ? ev.missing.map(function (m) {
+            return '<span class="jr-chip miss" title="判定标准里有要求，但岗位原文没提">未提及 · ' +
+              esc(m) + '</span>';
+          }).join('')
+        : '<span class="jr-empty">模型未指出遗漏项</span>';
+    } else {
+      actionChips = ''
+        .concat(ev.actions.length ? ev.actions.map(function (x) { return '<span class="jr-chip n">' + esc(x.term) + '</span>'; }).join('') : '')
+        .concat(ev.metrics.length ? ev.metrics.map(function (x) { return '<span class="jr-chip n">' + esc(x.term) + '</span>'; }).join('') : '');
+      if (!actionChips) actionChips = '<span class="jr-empty">未命中建设动作或工程指标</span>';
+    }
 
+    /* 规则模式带权重数字，模型模式没有权重——空权重不能拼出两个空格 */
     var weakChips = ev.weak.length
       ? ev.weak.map(function (x) {
-          return '<span class="jr-chip b" title="' + esc(x.note || '') + '">' + esc(x.term) + ' ' + x.w + '</span>';
+          var w = (typeof x.w === 'number' && x.w !== 0) ? ' ' + x.w : '';
+          return '<span class="jr-chip b"' +
+            (x.note ? ' title="' + esc(x.note) + '"' : '') + '>' + esc(x.term) + w + '</span>';
         }).join('')
-      : '<span class="jr-empty">无减分项</span>';
+      : '<span class="jr-empty">' + (modelMode ? '模型未指出减分项' : '无减分项') + '</span>';
 
-    if (ev.excludes.length) {
+    if (ev.excludes && ev.excludes.length) {
       weakChips += ev.excludes.map(function (x) {
         return '<span class="jr-chip b">' + esc(x.term) + '（排除词）</span>';
       }).join('');
@@ -2089,10 +2161,19 @@
 
     var notes = '';
     if (ev.grade === 'insufficient') {
-      notes += '<div class="jr-note warn"><b>JD 仅 ' + ev.jdLength + ' 字</b>，抽取可能失败或岗位描述过短。证据不足不下结论，请确认页面是否加载完整，或点「重新抽取」。</div>';
+      notes += modelMode
+        ? '<div class="jr-note warn"><b>模型判定为信息不足</b>：' +
+          esc((d.verdict && d.verdict.oneLine) || '证据不足以支撑结论') +
+          '。可以换一条判定标准，或确认 JD 是否完整。</div>'
+        : '<div class="jr-note warn"><b>JD 仅 ' + ev.jdLength + ' 字</b>，抽取可能失败或岗位描述过短。证据不足不下结论，请确认页面是否加载完整，或点「重新抽取」。</div>';
     }
     if (ev.grade === 'irrelevant') {
       notes += '<div class="jr-note"><b>未命中任何目标族群词。</b>这可能是别类岗位（如通用后端、销售），本工具只对五类热门/紧缺岗位打分。</div>';
+    }
+    if (d.divergence) {
+      notes += '<div class="jr-note warn"><b>规则与模型分歧</b>：本地词库判为「' +
+        esc(d.divergence.rulesLabel) + '」，模型判为「' + esc(d.divergence.modelLabel) +
+        '」，相差 ' + Math.abs(d.divergence.delta) + ' 级。别只看分数，翻证据再决定。</div>';
     }
     if (d.staleDays >= 30) {
       notes += '<div class="jr-note warn"><b>已连续挂牌 ' + d.staleDays + ' 天。</b>可能是高流动岗位持续招聘，也可能是僵尸岗；本项不扣分，仅供参考。</div>';
@@ -2101,6 +2182,12 @@
     var savedLabel = d.saved
       ? '更新记录 · 第 ' + d.seenCount + ' 次'
       : '保存到本地库';
+
+    var tStrong = modelMode
+      ? '支持证据 · 模型给出「' + ev.strong.length + '」条'
+      : '强信号 · 有预算的建设项目（' + ev.strong.length + '）';
+    var tAction = modelMode ? '标准要求但原文未提及' : '建设动作 / 工程指标';
+    var tWeak = modelMode ? '减分项 / 风险' : '减分项';
 
     root.innerHTML =
       '<div class="jr-panel' + (collapsed ? ' collapsed' : '') + '">' +
@@ -2111,11 +2198,12 @@
       '<button class="jr-icon" data-act="re-extract" title="重新抽取">↻</button>' +
       '<button class="jr-icon" data-act="toggle" title="折叠 / 展开">' + (collapsed ? '＋' : '－') + '</button>' +
       '</div>' +
+      stdBar(d) +
       '<div class="jr-body">' +
       '<div class="jr-score">' +
       '<div class="jr-ring" style="--p:' + ev.score + ';--c:' + color + '"><b>' + ev.score + '</b></div>' +
       '<div><div class="jr-grade" style="color:' + color + '">' + esc(ev.gradeLabel) + '</div>' +
-      '<div class="jr-gdesc">' + esc(ev.gradeDesc) + '</div></div>' +
+      '<div class="jr-gdesc">' + esc(gdesc) + '</div></div>' +
       '</div>' +
       '<div class="jr-tags">' + tags.join('') + '</div>' +
       '<div class="jr-fields">' +
@@ -2128,16 +2216,17 @@
       fieldRow('活跃', f.activeText, f.activeText ? '页面' : '未取到') +
       '</div>' +
       notes +
-      '<div class="jr-sec"><h4>强信号 · 有预算的建设项目（' + ev.strong.length + '）</h4><div class="jr-chips">' + strongChips + '</div></div>' +
-      '<div class="jr-sec"><h4>建设动作 / 工程指标</h4><div class="jr-chips">' + actionChips + '</div></div>' +
-      '<div class="jr-sec"><h4>减分项</h4><div class="jr-chips">' + weakChips + '</div></div>' +
+      '<div class="jr-sec"><h4>' + esc(tStrong) + '</h4><div class="jr-chips">' + strongChips + '</div></div>' +
+      '<div class="jr-sec"><h4>' + esc(tAction) + '</h4><div class="jr-chips">' + actionChips + '</div></div>' +
+      '<div class="jr-sec"><h4>' + esc(tWeak) + '</h4><div class="jr-chips">' + weakChips + '</div></div>' +
       '</div>' +
       '<div class="jr-foot">' +
       '<button class="jr-btn ' + (d.saved ? 'done' : 'primary') + '" data-act="save">' + esc(savedLabel) + '</button>' +
       '<button class="jr-btn" data-act="copy">复制摘要</button>' +
       '<button class="jr-btn" data-act="diag">复制诊断</button>' +
       '</div>' +
-      '<div class="jr-mini">JD 来源：' + esc(src.jd || '未取到') + ' · 共 ' + ev.jdLength + ' 字 · 仅个人使用，不采集他人信息</div>' +
+      '<div class="jr-mini">JD 来源：' + esc(src.jd || '未取到') + ' · 共 ' + ev.jdLength +
+      ' 字 · 判定：' + esc(judgeLabel(d)) + ' · 仅个人使用，不采集他人信息</div>' +
       '</div>';
   }
 
@@ -2165,6 +2254,22 @@
         handlers.onDiag(btn);
       }
     });
+
+    /* 标准下拉用 change 而不是 click：click 阶段拿不到用户最终选中的值 */
+    shadow.addEventListener('change', function (e) {
+      var el = e.target;
+      if (!el || !el.getAttribute) return;
+      if (el.getAttribute('data-act') !== 'profile') return;
+      if (handlers.onSwitchProfile) handlers.onSwitchProfile(el.value);
+    });
+  }
+
+  /* 只改数据再重绘，不重建宿主：切岗位时宿主被换掉会让面板闪一下，
+     也会丢掉折叠状态。 */
+  function update(mutator) {
+    if (!lastData) return;
+    if (typeof mutator === 'function') mutator(lastData);
+    render();
   }
 
   function markSaved(record) {
@@ -2181,6 +2286,7 @@
     hide: hide,
     setBusy: setBusy,
     markSaved: markSaved,
+    update: update,
     bind: bind,
     getData: function () { return lastData; }
   };

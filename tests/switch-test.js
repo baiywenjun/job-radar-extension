@@ -96,6 +96,7 @@ w.chrome = {
 [
   'src/common/util.js',
   'src/common/rules.js',
+  'src/common/verdict.js',
   'src/content/adapters.js',
   'src/content/extract.js',
   'src/content/diagnose.js',
