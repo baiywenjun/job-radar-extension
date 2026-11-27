@@ -6,6 +6,22 @@
 
   var HOST_ID = 'jr-radar-host';
 
+  /* 版本号优先取 manifest，避免出现「清单 0.2.0、面板 0.1.5」这种不一致。
+     preview.html 不跑在扩展里，退回构建时常量；preview-smoke 会校验它与清单同步。 */
+  var VERSION = (function () {
+    try {
+      if (global.chrome && global.chrome.runtime && global.chrome.runtime.getManifest) {
+        return global.chrome.runtime.getManifest().version;
+      }
+    } catch (e) { /* 非扩展环境 */ }
+    return '0.2.0';
+  })();
+
+  function brand() {
+    return '<div class="jr-brand"><span class="jr-dot"></span>岗位雷达' +
+      '<span class="jr-version">白橙版 v' + VERSION + '</span></div>';
+  }
+
   var CSS = `
 :host{all:initial}
 *{box-sizing:border-box}
@@ -182,7 +198,7 @@
     root.innerHTML =
       '<div class="jr-panel">' +
       '<div class="jr-head">' +
-      '<div class="jr-brand"><span class="jr-dot"></span>岗位雷达<span class="jr-version">白橙版 v0.1.5</span></div>' +
+      brand() +
       '<div class="jr-spacer"></div>' +
       '<button class="jr-icon" data-act="re-extract" title="重新抽取">↻</button>' +
       '<button class="jr-icon" data-act="dismiss" title="关闭">×</button>' +
@@ -283,7 +299,7 @@
     root.innerHTML =
       '<div class="jr-panel' + (collapsed ? ' collapsed' : '') + '">' +
       '<div class="jr-head">' +
-      '<div class="jr-brand"><span class="jr-dot"></span>岗位雷达<span class="jr-version">白橙版 v0.1.5</span></div>' +
+      brand() +
       (busyText ? '<span class="jr-busy">' + esc(busyText) + '</span>' : '') +
       '<div class="jr-spacer"></div>' +
       '<button class="jr-icon" data-act="re-extract" title="重新抽取">↻</button>' +

@@ -7,8 +7,10 @@
   'use strict';
 
   var DB_NAME = 'jr-radar';
-  var DB_VER = 1;
+  var DB_VER = 2;
   var STORE = 'jobs';
+  var VERDICTS = 'verdicts';
+  var USAGE = 'usage';
   var dbPromise = null;
 
   function open() {
@@ -17,6 +19,7 @@
       var req = indexedDB.open(DB_NAME, DB_VER);
       req.onupgradeneeded = function (e) {
         var db = e.target.result;
+
         if (!db.objectStoreNames.contains(STORE)) {
           var store = db.createObjectStore(STORE, { keyPath: 'key' });
           store.createIndex('firstSeen', 'firstSeen');
@@ -24,6 +27,18 @@
           store.createIndex('score', 'score');
           store.createIndex('platform', 'platform');
           store.createIndex('group', 'group');
+        }
+
+        /* v2：判定结果。复合主键（岗位 key + 标准 id），
+           同一岗位在不同判定标准下各存一份，互不覆盖。 */
+        if (!db.objectStoreNames.contains(VERDICTS)) {
+          var vs = db.createObjectStore(VERDICTS, { keyPath: ['key', 'profileId'] });
+          vs.createIndex('createdAt', 'createdAt');
+        }
+
+        /* v2：按天累计的调用量与 token，用于每日限额与成本展示 */
+        if (!db.objectStoreNames.contains(USAGE)) {
+          db.createObjectStore(USAGE, { keyPath: 'date' });
         }
       };
       req.onsuccess = function (e) {
@@ -161,6 +176,120 @@
     });
   }
 
+  /* ---------- 以下为 v2 新增：判定结果与用量 ---------- */
+
+  /* 统一的事务包装：fn 里只负责发请求，返回值通过 setResult 交给 resolve */
+  function withStore(name, mode, fn) {
+    return open().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction(name, mode);
+        var result;
+        tx.oncomplete = function () { resolve(result); };
+        tx.onerror = function () { reject(tx.error); };
+        tx.onabort = function () { reject(tx.error || new Error('transaction aborted')); };
+        try {
+          fn(tx.objectStore(name), function (v) { result = v; });
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+  }
+
+  /* 判定结果：主键是 [key, profileId] 复合键 */
+  function putVerdict(v) {
+    return withStore(VERDICTS, 'readwrite', function (store) {
+      store.put(v);
+    }).then(function () { return v; });
+  }
+
+  function getVerdict(key, profileId) {
+    return withStore(VERDICTS, 'readonly', function (store, set) {
+      var req = store.get([key, profileId]);
+      req.onsuccess = function () { set(req.result || null); };
+    });
+  }
+
+  /* 同一岗位的全部判定（跨标准、跨时间），用于历史对比 */
+  function listVerdicts(key) {
+    return withStore(VERDICTS, 'readonly', function (store, set) {
+      var req = store.getAll();
+      req.onsuccess = function () {
+        var list = (req.result || []).filter(function (v) { return v.key === key; });
+        list.sort(function (a, b) { return (b.createdAt || 0) - (a.createdAt || 0); });
+        set(list);
+      };
+    });
+  }
+
+  function countVerdicts() {
+    return withStore(VERDICTS, 'readonly', function (store, set) {
+      var req = store.count();
+      req.onsuccess = function () { set(req.result || 0); };
+    });
+  }
+
+  function clearVerdicts() {
+    return withStore(VERDICTS, 'readwrite', function (store, set) {
+      store.clear();
+      set(true);
+    });
+  }
+
+  var EMPTY_USAGE = { calls: 0, inTokens: 0, outTokens: 0, cost: 0 };
+
+  /* 当日用量累加。读改写放在同一个 readwrite 事务里，避免并发覆盖。 */
+  function bumpUsage(date, delta) {
+    delta = delta || {};
+    return withStore(USAGE, 'readwrite', function (store, set) {
+      var getReq = store.get(date);
+      getReq.onsuccess = function () {
+        var cur = getReq.result || { date: date };
+        var next = {
+          date: date,
+          calls: (cur.calls || 0) + (Number(delta.calls) || 0),
+          inTokens: (cur.inTokens || 0) + (Number(delta.inTokens) || 0),
+          outTokens: (cur.outTokens || 0) + (Number(delta.outTokens) || 0),
+          cost: (cur.cost || 0) + (Number(delta.cost) || 0),
+          updatedAt: Date.now()
+        };
+        store.put(next);
+        set(next);
+      };
+    });
+  }
+
+  function getUsage(date) {
+    return withStore(USAGE, 'readonly', function (store, set) {
+      var req = store.get(date);
+      req.onsuccess = function () {
+        var r = req.result;
+        set(r || { date: date, calls: 0, inTokens: 0, outTokens: 0, cost: 0 });
+      };
+    });
+  }
+
+  /* prefix 形如 '2026-11'，用于月度成本统计 */
+  function listUsage(prefix) {
+    return withStore(USAGE, 'readonly', function (store, set) {
+      var req = store.getAll();
+      req.onsuccess = function () {
+        var list = (req.result || []).filter(function (u) {
+          return !prefix || String(u.date || '').indexOf(prefix) === 0;
+        });
+        list.sort(function (a, b) { return String(a.date).localeCompare(String(b.date)); });
+        set(list);
+      };
+    });
+  }
+
+  function clearUsage() {
+    return withStore(USAGE, 'readwrite', function (store, set) {
+      store.clear();
+      set(true);
+    });
+  }
+
   global.JR_DB = {
     open: open,
     save: save,
@@ -169,7 +298,20 @@
     remove: remove,
     clearAll: clearAll,
     count: count,
+    putVerdict: putVerdict,
+    getVerdict: getVerdict,
+    listVerdicts: listVerdicts,
+    countVerdicts: countVerdicts,
+    clearVerdicts: clearVerdicts,
+    bumpUsage: bumpUsage,
+    getUsage: getUsage,
+    listUsage: listUsage,
+    clearUsage: clearUsage,
     DB_NAME: DB_NAME,
-    STORE: STORE
+    DB_VER: DB_VER,
+    STORE: STORE,
+    VERDICTS: VERDICTS,
+    USAGE: USAGE,
+    EMPTY_USAGE: EMPTY_USAGE
   };
 })(typeof window !== 'undefined' ? window : globalThis);

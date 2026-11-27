@@ -2,152 +2,234 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>岗位雷达 · 本地岗位库</title>
-<style>
-  :root{
-    --ink:#38291e;--ink2:#68503b;--ink3:#8b755f;--line:#f1dac1;--soft:#faecdc;
-    --good:#1c7a4c;--goodbg:#eaf6ee;--goodline:#c6e6d2;
-    --bad:#a3362f;--badbg:#fcecea;--badline:#f0cdc8;
-    --accent:#e86b0a;--accentbg:#fff0df;--accentline:#ffc88c;
-    --warn:#8a5a12;--warnbg:#fdf3e2;--warnline:#eeddb8;
-  }
-  *{box-sizing:border-box}
-  html,body{margin:0}
-  body{
-    width:800px;height:600px;display:flex;flex-direction:column;
-    background:#fffaf5;color:var(--ink);
-    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
-    font-size:13px;line-height:1.55;-webkit-font-smoothing:antialiased;
-  }
-  header{display:flex;align-items:center;gap:10px;padding:13px 16px 11px;background:linear-gradient(90deg,#fff0df,#fffaf5);border-top:4px solid var(--accent);border-bottom:1px solid var(--line);flex:0 0 auto}
-  .brand{display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px;letter-spacing:.2px;color:#ab4600}
-  .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px var(--accentbg)}
-  .edition{font-size:10px;color:#a34400;background:#ffe2bd;border:1px solid #f9b56d;border-radius:999px;padding:1px 7px;letter-spacing:0}
-  .brand em{font-style:normal;font-weight:400;color:var(--ink3);font-size:12px}
-  .hdr-right{margin-left:auto;display:flex;align-items:center;gap:8px;color:var(--ink3);font-size:12px}
-  .hdr-right b{color:var(--accent);font-size:15px;font-variant-numeric:tabular-nums}
-
-  .stats{display:grid;grid-template-columns:repeat(5,1fr);gap:9px;padding:12px 16px 0;flex:0 0 auto}
-  .stat{background:#fff;border:1px solid var(--line);border-radius:9px;padding:9px 11px}
-  .stat .v{font-size:19px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.2}
-  .stat .k{font-size:11px;color:var(--ink3);margin-top:1px}
-  .stat.g .v{color:var(--good)}
-  .stat.b .v{color:var(--bad)}
-  .stat.w .v{color:var(--warn)}
-  .stat.n .v{color:var(--accent)}
-
-  .bar{display:flex;gap:8px;align-items:center;padding:11px 16px;flex:0 0 auto}
-  .bar input,.bar select{
-    padding:7px 10px;border:1px solid var(--line);border-radius:7px;background:#fff;
-    font-size:12.5px;color:var(--ink);font-family:inherit;outline:none
-  }
-  .bar input{flex:1;min-width:120px}
-  .bar input:focus,.bar select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(232,107,10,.12)}
-  .bar button{
-    padding:7px 12px;border:1px solid var(--line);border-radius:7px;background:#fff;
-    color:var(--ink2);font-size:12.5px;font-family:inherit;cursor:pointer;white-space:nowrap
-  }
-  .bar button:hover{border-color:var(--accent);color:var(--accent)}
-  .bar button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
-  .bar button.primary:hover{background:#bb5200;color:#fff}
-
-  .tablewrap{flex:1 1 auto;overflow:auto;padding:0 16px 8px}
-  table{width:100%;border-collapse:separate;border-spacing:0;background:#fff;
-    border:1px solid var(--line);border-radius:10px;overflow:hidden;font-size:12.5px}
-  thead th{
-    position:sticky;top:0;z-index:2;background:#fff0df;color:var(--ink2);font-weight:600;
-    font-size:11.5px;text-align:left;padding:8px 9px;border-bottom:1px solid var(--line);white-space:nowrap
-  }
-  tbody td{padding:7px 9px;border-bottom:1px solid var(--soft);vertical-align:middle}
-  tbody tr:last-child td{border-bottom:none}
-  tbody tr:hover{background:#fff5e9}
-  .sc{display:inline-block;min-width:32px;text-align:center;font-weight:700;font-variant-numeric:tabular-nums;
-    padding:1px 5px;border-radius:4px;font-size:12px}
-  .sc.strong{background:var(--goodbg);color:var(--good);border:1px solid var(--goodline)}
-  .sc.neutral{background:var(--accentbg);color:var(--accent);border:1px solid var(--accentline)}
-  .sc.weak{background:var(--warnbg);color:var(--warn);border:1px solid var(--warnline)}
-  .sc.poor{background:var(--badbg);color:var(--bad);border:1px solid var(--badline)}
-  .sc.insufficient,.sc.irrelevant{background:#f1f3f7;color:var(--ink3);border:1px solid var(--line)}
-  .jt{max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .jt a{color:var(--ink);text-decoration:none;font-weight:600}
-  .jt a:hover{color:var(--accent);text-decoration:underline}
-  .co{max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink2)}
-  .sal{white-space:nowrap;color:var(--good);font-weight:600}
-  .grp{font-size:11px;padding:1px 6px;border-radius:4px;background:var(--accentbg);color:var(--accent);
-    border:1px solid var(--accentline);white-space:nowrap}
-  .days{white-space:nowrap;color:var(--ink3);font-variant-numeric:tabular-nums}
-  .days.stale{color:var(--warn);font-weight:600}
-  .del{border:none;background:transparent;color:#c3cad6;cursor:pointer;font-size:15px;line-height:1;padding:2px 4px;border-radius:4px}
-  .del:hover{background:var(--badbg);color:var(--bad)}
-  .empty{padding:44px 20px;text-align:center;color:var(--ink3);font-size:13px;line-height:2}
-  .empty b{color:var(--ink2)}
-  .empty code{background:#fff0df;padding:1px 5px;border-radius:4px;font-size:12px}
-
-  footer{flex:0 0 auto;padding:9px 16px 11px;border-top:1px solid var(--line);background:#fff6eb;
-    color:var(--ink3);font-size:11px;line-height:1.6;display:flex;gap:12px;align-items:center}
-  footer .sp{flex:1}
-  footer button{border:1px solid var(--line);background:#fff;color:var(--ink3);font-size:11px;
-    padding:4px 9px;border-radius:6px;cursor:pointer;font-family:inherit}
-  footer button:hover{border-color:var(--bad);color:var(--bad)}
-</style>
+<title>岗位雷达</title>
+<link rel="stylesheet" href="popup.css">
 </head>
 <body>
 
 <header>
-  <div class="brand"><span class="dot"></span>岗位雷达<em>本地岗位库</em><span class="edition">白橙版 v0.1.5</span></div>
-  <div class="hdr-right"><b id="total">0</b> 条记录</div>
+  <div class="brand"><span class="dot"></span>岗位雷达<span class="edition">v0.2.0</span></div>
+  <nav class="tabs">
+    <button class="tab active" data-view="profiles">判定标准</button>
+    <button class="tab" data-view="library">岗位库</button>
+  </nav>
+  <div class="hdr-right">
+    <button class="icon-btn" id="btnSettings" title="设置">⚙</button>
+  </div>
 </header>
 
-<div class="stats" id="stats"></div>
+<main>
 
-<div class="bar">
-  <input id="q" type="text" placeholder="搜索职位 / 公司 / 技术词，如 vLLM、FDE、世界模型" autocomplete="off">
-  <select id="group"><option value="">全部族群</option></select>
-  <select id="grade">
-    <option value="">全部分档</option>
-    <option value="strong">强信号</option>
-    <option value="neutral">中性</option>
-    <option value="weak">偏弱</option>
-    <option value="poor">高概率伪岗</option>
-    <option value="insufficient">信息不足</option>
-    <option value="irrelevant">非目标岗位</option>
-  </select>
-  <button id="exportCsv" class="primary">导出 CSV</button>
-  <button id="exportMd">导出 MD</button>
-</div>
+  <!-- ========== 判定标准 ========== -->
+  <section class="view active" id="view-profiles">
+    <div class="pf-wrap">
+      <aside class="pf-list">
+        <div class="pf-list-head">
+          <span>我的标准</span>
+          <button class="btn sm" id="pfNew">＋ 新建</button>
+        </div>
+        <div class="pf-items" id="pfItems"></div>
+        <div class="hint" style="padding:2px 11px 10px" id="pfListHint"></div>
+      </aside>
+      <div class="pf-edit">
+        <div class="pf-empty" id="pfEmpty">
+          <b>还没有判定标准</b>
+          写一条你自己的岗位要求，模型按它判断，<br>
+          不再用代码里写死的词库。<br><br>
+          可以从「岗位名」+「岗位分析要求」两栏开始，<br>
+          必要项与一票否决项收在「高级」里。
+        </div>
 
-<div class="tablewrap">
-  <table id="tbl">
-    <thead>
-      <tr>
-        <th style="width:52px">评分</th>
-        <th>职位</th>
-        <th>公司</th>
-        <th style="width:88px">薪资</th>
-        <th style="width:62px">城市</th>
-        <th style="width:82px">族群</th>
-        <th style="width:62px">挂牌</th>
-        <th style="width:34px"></th>
-      </tr>
-    </thead>
-    <tbody id="tbody"></tbody>
-  </table>
-  <div class="empty" id="empty" style="display:none">
-    <b>还没有记录。</b><br>
-    打开 BOSS 直聘 / 猎聘 / 脉脉 / 国聘 的岗位详情页，<br>
-    在右侧面板点「保存到本地库」<code>即可入库</code>。
-  </div>
-</div>
+        <form id="pfForm" style="display:none" autocomplete="off">
+          <div class="pf-title">
+            <h3 id="pfTitle">编辑标准</h3>
+            <span class="ver" id="pfVer"></span>
+          </div>
 
-<footer>
-  <span>仅统计你实际浏览并保存的公开挂牌岗位，样本有偏，不代表全市场缺口。</span>
-  <span class="sp"></span>
-  <button id="clearAll">清空本地库</button>
-</footer>
+          <label class="field">
+            <span>岗位名</span>
+            <input type="text" id="pfName" maxlength="40" placeholder="如：FDE / AI Agent 工程师 / AI Infra">
+          </label>
+
+          <label class="field">
+            <span>岗位分析要求</span>
+            <textarea id="pfReq" rows="11" placeholder="写清楚什么样的岗位算符合。例如：&#10;面向客户的交付岗，需要独立完成 POC、部署与联调，能接受阶段性驻场；&#10;技术要求偏 RAG / Agent 落地，而不是纯算法研究；&#10;团队规模小于 50 人的创业公司优先。"></textarea>
+          </label>
+
+          <details class="adv">
+            <summary>高级：必要项 / 一票否决（可留空）</summary>
+            <div class="adv-body">
+              <label class="field">
+                <span>必要项（一行一条，缺了就算不匹配）</span>
+                <textarea id="pfMust" rows="3" placeholder="私有化部署经验&#10;客户现场沟通"></textarea>
+              </label>
+              <label class="field" style="margin-bottom:0">
+                <span>一票否决（一行一条，命中就直接排除）</span>
+                <textarea id="pfRed" rows="3" placeholder="纯外包 / 劳务派遣&#10;电话销售&#10;培训招生"></textarea>
+              </label>
+            </div>
+          </details>
+
+          <div class="pf-actions">
+            <button type="submit" class="btn primary" id="pfSave">保存</button>
+            <button type="button" class="btn danger" id="pfDelete">删除</button>
+            <span class="msg" id="pfMsg"></span>
+          </div>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== 岗位库 ========== -->
+  <section class="view" id="view-library">
+    <div class="stats" id="stats"></div>
+
+    <div class="bar">
+      <input type="text" id="q" placeholder="搜索职位 / 公司 / 技术词，如 vLLM、FDE、世界模型" autocomplete="off">
+      <select id="group" style="width:auto"><option value="">全部族群</option></select>
+      <select id="grade" style="width:auto">
+        <option value="">全部分档</option>
+        <option value="strong">强信号</option>
+        <option value="neutral">中性</option>
+        <option value="weak">偏弱</option>
+        <option value="poor">高概率伪岗</option>
+        <option value="insufficient">信息不足</option>
+        <option value="irrelevant">非目标岗位</option>
+      </select>
+      <button id="exportCsv" class="primary">导出 CSV</button>
+      <button id="exportMd">导出 MD</button>
+    </div>
+
+    <div class="tablewrap">
+      <table id="tbl">
+        <thead>
+          <tr>
+            <th style="width:52px">评分</th>
+            <th>职位</th>
+            <th>公司</th>
+            <th style="width:88px">薪资</th>
+            <th style="width:62px">城市</th>
+            <th style="width:82px">族群</th>
+            <th style="width:62px">挂牌</th>
+            <th style="width:34px"></th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+      <div class="empty" id="empty" style="display:none">
+        <b>还没有记录。</b><br>
+        打开 BOSS 直聘 / 猎聘 / 脉脉 / 国聘 的岗位详情页，<br>
+        在右侧面板点「保存到本地库」<code>即可入库</code>。
+      </div>
+    </div>
+
+    <footer>
+      <span>仅统计你实际浏览并保存的公开挂牌岗位，样本有偏，不代表全市场缺口。</span>
+      <span class="sp"></span>
+      <button id="clearAll">清空本地库</button>
+    </footer>
+  </section>
+
+  <!-- ========== 设置 ========== -->
+  <section class="view" id="view-settings">
+    <div class="st-wrap">
+      <div class="st-head">
+        <button class="back" id="stBack">← 返回</button>
+        <h3>设置</h3>
+      </div>
+
+      <div class="card">
+        <h4>模型 API <span class="tag">OpenAI 兼容</span></h4>
+        <p class="sub">Key 只存在本机浏览器里，不同步、不写日志、不进入网页上下文。内容脚本永远读不到它。</p>
+
+        <label class="field">
+          <span>baseURL</span>
+          <input type="text" id="stBase" placeholder="https://api.deepseek.com/v1" autocomplete="off">
+        </label>
+
+        <label class="field">
+          <span>API Key</span>
+          <div class="keyrow">
+            <input type="password" id="stKey" placeholder="sk-…" autocomplete="off">
+            <button type="button" class="btn sm" id="stEye">显示</button>
+          </div>
+        </label>
+
+        <div class="grid2">
+          <label class="field">
+            <span>模型名</span>
+            <input type="text" id="stModel" placeholder="deepseek-chat" autocomplete="off">
+          </label>
+          <label class="field">
+            <span>Key 存储方式</span>
+            <select id="stKeyMode">
+              <option value="local">存本机（重开浏览器仍在）</option>
+              <option value="session">仅本次会话（关浏览器即失效）</option>
+            </select>
+          </label>
+        </div>
+
+        <details class="adv">
+          <summary>高级参数（温度 / 超时 / 输出上限 / 单价）</summary>
+          <div class="adv-body">
+            <div class="grid2">
+              <label class="field">
+                <span>temperature（0–2，越低越稳）</span>
+                <input type="number" id="stTemp" step="0.1" min="0" max="2">
+              </label>
+              <label class="field">
+                <span>超时（毫秒）</span>
+                <input type="number" id="stTimeout" step="1000" min="3000" max="180000">
+              </label>
+              <label class="field">
+                <span>最大输出 tokens</span>
+                <input type="number" id="stMaxOut" step="100" min="64" max="8192">
+              </label>
+              <label class="field">
+                <span>&nbsp;</span>
+                <div class="hint">输出给太少会把 JSON 截断，1200 是安全下限。</div>
+              </label>
+              <label class="field">
+                <span>输入单价（元 / 百万 token）</span>
+                <input type="number" id="stPriceIn" step="0.1" min="0" placeholder="按供应商实际单价填">
+              </label>
+              <label class="field">
+                <span>输出单价（元 / 百万 token）</span>
+                <input type="number" id="stPriceOut" step="0.1" min="0" placeholder="按供应商实际单价填">
+              </label>
+            </div>
+            <div class="hint">单价只用于成本统计，代码里不内置任何价格，避免过期。</div>
+          </div>
+        </details>
+
+        <div class="st-actions">
+          <button class="btn primary" id="stSave">保存</button>
+          <button class="btn" id="stTest">测试连接</button>
+          <span class="msg" id="stMsg"></span>
+        </div>
+        <div class="st-result" id="stResult"></div>
+      </div>
+
+      <div class="card">
+        <h4>我的数据</h4>
+        <p class="sub">配置与判定结果都在本机。清空岗位库不影响判定标准与 Key。</p>
+        <div class="kv" id="stStats"></div>
+        <button class="btn danger sm" id="stClearVerdicts">清空判定缓存</button>
+        <span class="msg" id="stDataMsg" style="margin-left:8px"></span>
+      </div>
+    </div>
+  </section>
+
+</main>
 
 <script src="../common/util.js"></script>
 <script src="../common/rules.js"></script>
 <script src="../common/db.js"></script>
+<script src="../common/settings.js"></script>
+<script src="../common/profiles.js"></script>
+<script src="view-library.js"></script>
+<script src="view-profiles.js"></script>
+<script src="view-settings.js"></script>
 <script src="popup.js"></script>
 </body>
 </html>

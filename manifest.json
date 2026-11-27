@@ -1,15 +1,17 @@
 {
   "manifest_version": 3,
   "name": "岗位雷达 · JD 结构化记录仪",
-  "version": "0.1.5",
-  "description": "在招聘网站岗位详情页把 JD 结构化留存，按强/弱信号词打分，识别疑似伪岗、外包岗与僵尸岗。个人求职辅助工具，不做批量采集。",
+  "version": "0.2.0",
+  "description": "用你自己的判定标准 + 模型 API 探测岗位真伪，并在本地留存 JD 原文。个人求职辅助工具，不做批量采集。",
   "permissions": ["storage", "unlimitedStorage"],
   "host_permissions": [
     "https://*.zhipin.com/*",
     "https://*.maimai.cn/*",
     "https://*.liepin.com/*",
-    "https://*.iguopin.com/*"
+    "https://*.iguopin.com/*",
+    "https://api.deepseek.com/*"
   ],
+  "optional_host_permissions": ["https://*/*"],
   "background": {
     "service_worker": "src/background/sw.js"
   },
@@ -35,7 +37,7 @@
   ],
   "action": {
     "default_popup": "src/popup/popup.html",
-    "default_title": "岗位雷达 · 查看本地岗位库",
+    "default_title": "岗位雷达 · 判定标准与岗位库",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
