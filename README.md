@@ -15,7 +15,7 @@
 > | S4 | 调试与产出 | 试跑、逐字 payload、数据检查器、CSV / MD / JSON |
 > | **S5** | 对照与发布 | **同一岗位的判定历史与档位轨迹**、全量回归、四站验证清单 |
 >
-> 详细实施记录见 `docs/PLAN-01-implementation.md`，设计与取舍见 `docs/REFACTOR-01-model-verdict.md`。
+> 详细实施记录见 `docs/PLAN-01-implementation.md`，设计与取舍见 `docs/REFACTOR-01-model-verdict.md`，四站真机验证清单（可回填）见 `docs/VERIFY-01-four-sites.md`。
 
 ---
 
