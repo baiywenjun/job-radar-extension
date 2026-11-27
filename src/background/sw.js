@@ -88,7 +88,13 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     PROFILES_DELETE: 1,
     STATS: 1,
     USAGE_GET: 1,
-    CLEAR_VERDICTS: 1
+    CLEAR_VERDICTS: 1,
+    /* 下面四条都涉及「提示词原文」「写回岗位记录」「读全部判定」：
+       内容脚本没有任何理由调用，一律只认扩展页面。 */
+    PAYLOAD_GET: 1,
+    PAYLOAD_CLEAR: 1,
+    JOB_PATCH: 1,
+    VERDICTS_ALL: 1
   };
   if (PRIVATE[msg.type] && !fromExtensionPage(sender)) return deny(sendResponse);
 
@@ -286,6 +292,33 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
   if (msg.type === 'CLEAR_VERDICTS') {
     return reply(JR_DB.clearVerdicts().then(function () { return {}; }), sendResponse);
   }
+
+  /* ---------- S4：调试与产出 ---------- */
+
+  /* 最近一次真正发出去的提示词。Key 在写入时已换成掩码，这里原样回传。 */
+  if (msg.type === 'PAYLOAD_GET') {
+    return reply(S.getLastPayload().then(function (p) {
+      return { payload: p || null };
+    }), sendResponse);
+  }
+
+  if (msg.type === 'PAYLOAD_CLEAR') {
+    return reply(S.clearLastPayload().then(function () { return {}; }), sendResponse);
+  }
+
+  /* 局部更新岗位记录：检查器里「重新判定」把新结论写回。
+     不能用 SAVE——那会涨 seenCount，把挂牌天数与重复次数算脏。 */
+  if (msg.type === 'JOB_PATCH') {
+    return reply(JR_DB.update(msg.key, msg.patch || {}).then(function (record) {
+      return { record: record };
+    }), sendResponse);
+  }
+
+  if (msg.type === 'VERDICTS_ALL') {
+    return reply(JR_DB.listAllVerdicts().then(function (list) {
+      return { list: list };
+    }), sendResponse);
+  }
 });
 
 /* ---------- 判定端口 ----------
@@ -337,8 +370,17 @@ chrome.runtime.onConnect.addListener(function (port) {
 
   port.onMessage.addListener(function (msg) {
     if (!msg || msg.type !== 'START' || running) return;
-    running = true;
 
+    /* 试跑只允许扩展页面（popup）发起。它绕过每日上限与冷却，
+       若能由内容脚本触发，等于把成本闸门从侧门拆掉。 */
+    var fromTab = !!(port.sender && port.sender.tab);
+    if (msg.dryRun && fromTab) {
+      post({ type: 'FAIL', code: 'E_FORBIDDEN', error: '试跑只允许在扩展弹窗里发起' });
+      return;
+    }
+
+    running = true;
+    var dryRun = !!msg.dryRun;
     var lastDelta = 0;
 
     J.judgeJob({
@@ -349,8 +391,10 @@ chrome.runtime.onConnect.addListener(function (port) {
       profileId: msg.profileId,
       /* 面板上的「手动放行」与「重新判定」都走这两面旗：
          force 跳过缓存，allowOverLimit 同时越过每日上限与 429 冷却。 */
-      force: !!msg.force,
-      allowOverLimit: !!msg.allowOverLimit,
+      force: dryRun || !!msg.force,
+      allowOverLimit: dryRun || !!msg.allowOverLimit,
+      dryRun: dryRun,
+      profileOverride: dryRun ? msg.profileOverride : null,
       signal: ctrl ? ctrl.signal : null,
       onDelta: function (chars) {
         /* 节流：流式块可能几十毫秒一个，直接透传会让面板高频重绘 */
@@ -361,10 +405,15 @@ chrome.runtime.onConnect.addListener(function (port) {
       }
     }).then(function (verdict) {
       post({ type: 'DONE', verdict: verdict });
-      /* 命中缓存不重复落库、也不计费：调用量与花费只在真的发过请求时发生 */
+      /* 试跑：不落库、不计费。命中缓存也不重复落库、不计费——
+         调用量与花费只在真的发过请求时发生。 */
+      if (dryRun) return null;
       if (verdict && verdict.cached) return null;
-      return persistVerdict(verdict, todayKey()).catch(function () {
-        /* 落库失败不影响这次结论的展示 */
+      return persistVerdict(verdict, todayKey()).catch(function (e) {
+        /* 落库失败不影响这次结论的展示，但必须留下痕迹：
+           上一版就是因为它完全静默，「verdicts 一条都没写进去、
+           缓存永远不命中」这件事在真机上跑了整轮才被发现。 */
+        console.warn('[岗位雷达] 判定落库失败：', (e && e.message) || e);
       });
     }).catch(function (e) {
       /* 只认我们自己的字符串错误码。DOMException 的 code 是数字（abort=20），

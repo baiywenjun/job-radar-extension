@@ -95,6 +95,14 @@
       flags: ev.flags,
       jdLength: ev.jdLength,
       jdExcerpt: U.ellipsis(f.jdText, 600),
+      /* 完整正文（截 20000 字，抽取阶段已经是这个上限）。
+         数据检查器要对照原文核证据、「重新判定」要能不发第二次请求就拿同一段 JD 重跑，
+         只存 600 字摘要这两件事都做不到。 */
+      jdText: U.ellipsis(f.jdText, 20000),
+      /* 来源标签一起存：检查器要回答「公司名是从哪来的」，
+         而这是判断结论可信度的关键依据。 */
+      sources: f.sources || {},
+      dirty: f.dirty || null,
       url: f.url,
       /* 存"用户看到的那份结论"：模型跑成功就存模型档位，否则存规则档位。
          两者必须能区分，否则以后回看分不清结论是谁给的。 */

@@ -27,7 +27,7 @@ function check(name, cond, detail) {
 }
 
 /* ---------- 1. 静态 id 完整性 ---------- */
-const JS_FILES = ['popup.js', 'view-library.js', 'view-profiles.js', 'view-settings.js'];
+const JS_FILES = ['popup.js', 'export.js', 'view-library.js', 'view-profiles.js', 'view-settings.js'];
 const allJs = JS_FILES.map((f) => fs.readFileSync(path.join(popupDir, f), 'utf8')).join('\n');
 
 const ids = [];
@@ -111,6 +111,7 @@ function makeArea(store) {
 }
 
 const sent = [];
+let payloadReply = { ok: true, payload: null };
 
 win.chrome = {
   runtime: {
@@ -131,6 +132,8 @@ win.chrome = {
           });
         } else if (msg.type === 'PROFILES_SAVE') {
           cb({ ok: true, record: Object.assign({}, PROFILES[0], { version: 3 }) });
+        } else if (msg.type === 'PAYLOAD_GET') {
+          cb(payloadReply);
         } else {
           cb({ ok: true });
         }
@@ -153,6 +156,7 @@ try {
     '../common/db.js',
     '../common/settings.js',
     '../common/profiles.js',
+    'export.js',
     'view-library.js',
     'view-profiles.js',
     'view-settings.js',
@@ -163,7 +167,7 @@ try {
 } catch (e) {
   evalError = e;
 }
-check('九个脚本求值不抛错', evalError === null, evalError && evalError.message);
+check('十个脚本求值不抛错', evalError === null, evalError && evalError.message);
 
 const $ = (sel) => win.document.querySelector(sel);
 const viewOf = (name) => win.document.getElementById('view-' + name);
@@ -239,6 +243,44 @@ function wait(ms) {
     win.document.getElementById('stStats').textContent.indexOf('5') !== -1,
     win.document.getElementById('stStats').textContent);
 
+  /* ---- 发给模型的内容（S4） ---- */
+  check('payload 空态给出「去哪儿产生一条」',
+    win.document.getElementById('stPayloadMsg').textContent.indexOf('还没有发送过请求') !== -1,
+    win.document.getElementById('stPayloadMsg').textContent);
+  check('payload 元信息区在空态下为空',
+    win.document.getElementById('stPayloadMeta').innerHTML === '');
+
+  /* ---- 有 payload 时的展示 ---- */
+  payloadReply = {
+    ok: true,
+    payload: {
+      at: Date.now(),
+      dryRun: true,
+      model: 'deepseek-chat',
+      baseOrigin: 'https://api.deepseek.com',
+      keyMasked: 'sk-****1234',
+      promptVersion: 2,
+      meta: { jdChars: 1234, jdTruncated: true, cacheKey: 'k|p|2|2|deepseek-chat|abc' },
+      messages: [
+        { role: 'system', content: 'SYS-TEXT-角色与契约' },
+        { role: 'user', content: 'USER-TEXT-标准与正文' }
+      ]
+    }
+  };
+  win.JR_VIEW_SETTINGS.onShow();
+  await wait(20);
+  const pmeta = win.document.getElementById('stPayloadMeta').textContent;
+  check('payload 元信息显示模型名', pmeta.indexOf('deepseek-chat') !== -1, pmeta);
+  check('payload 元信息显示掩码 Key', pmeta.indexOf('sk-****1234') !== -1, pmeta);
+  check('payload 元信息显示正文长度与截断', pmeta.indexOf('1234 字') !== -1 && pmeta.indexOf('已截断') !== -1, pmeta);
+  check('payload 标出来源是试跑', pmeta.indexOf('试跑') !== -1, pmeta);
+  check('payload 全文：system 段',
+    win.document.getElementById('stPayloadSystem').textContent === 'SYS-TEXT-角色与契约',
+    win.document.getElementById('stPayloadSystem').textContent);
+  check('payload 全文：user 段',
+    win.document.getElementById('stPayloadUser').textContent === 'USER-TEXT-标准与正文',
+    win.document.getElementById('stPayloadUser').textContent);
+
   /* ---- 显示/隐藏 Key ---- */
   win.document.getElementById('stEye').click();
   check('点「显示」后 Key 变明文',
@@ -265,6 +307,21 @@ function wait(ms) {
   check('新建时版本标签显示未保存',
     win.document.getElementById('pfVer').textContent === '未保存',
     win.document.getElementById('pfVer').textContent);
+
+  /* ---- 试跑区（S4） ---- */
+  check('有标准时显示试跑区',
+    win.document.getElementById('pfDry').style.display === 'block',
+    win.document.getElementById('pfDry').style.display);
+  check('试跑按钮初始可点', win.document.getElementById('pfDryRun').disabled === false);
+
+  win.document.getElementById('pfDryJd').value = '';
+  win.document.getElementById('pfDryRun').click();
+  check('试跑空正文时只提示、不发请求',
+    win.document.getElementById('pfDryMsg').textContent.indexOf('先把岗位正文粘进来') !== -1,
+    win.document.getElementById('pfDryMsg').textContent);
+  check('空正文不会把按钮变成取消',
+    win.document.getElementById('pfDryRun').textContent === '开始试跑',
+    win.document.getElementById('pfDryRun').textContent);
 
   console.log('\n' + pass + ' 通过 / ' + fail + ' 失败');
   process.exit(fail ? 1 : 0);

@@ -9,6 +9,7 @@
   'use strict';
 
   var STORE_KEY = 'settings';
+  var PAYLOAD_KEY = 'lastPayload';
   var SCHEMA = 1;
 
   var DEFAULTS = {
@@ -215,6 +216,29 @@
     });
   }
 
+  /* ---------- 最近一次发给模型的内容 ----------
+   * 单独一个键，不混进 settings：它体积大（十几 KB 的两段提示词）、
+   * 每次判定都会覆盖，且清空它不该影响任何配置。
+   * 存进去之前已经把 Key 换成掩码——这一段是给人看和复制的，
+   * 一旦有人贴到 issue 里，明文 Key 就泄露了。
+   */
+  function saveLastPayload(p) {
+    if (!p) return Promise.resolve();
+    var obj = {};
+    obj[PAYLOAD_KEY] = p;
+    return writeArea('local', obj);
+  }
+
+  function getLastPayload() {
+    return readArea('local', PAYLOAD_KEY).then(function (items) {
+      return (items && items[PAYLOAD_KEY]) || null;
+    });
+  }
+
+  function clearLastPayload() {
+    return removeArea('local', PAYLOAD_KEY);
+  }
+
   function reset() {
     return Promise.all([
       writeArea('local', (function () {
@@ -223,7 +247,8 @@
         return o;
       })()),
       removeArea('local', 'apiKey'),
-      removeArea('session', 'apiKey')
+      removeArea('session', 'apiKey'),
+      removeArea('local', PAYLOAD_KEY)
     ]).then(function () {
       return get();
     });
@@ -233,6 +258,9 @@
     get: get,
     save: save,
     reset: reset,
+    saveLastPayload: saveLastPayload,
+    getLastPayload: getLastPayload,
+    clearLastPayload: clearLastPayload,
     normalize: normalize,
     normalizeBaseURL: normalizeBaseURL,
     originOf: originOf,
@@ -240,6 +268,7 @@
     hasSession: hasSession,
     DEFAULTS: DEFAULTS,
     SCHEMA: SCHEMA,
-    STORE_KEY: STORE_KEY
+    STORE_KEY: STORE_KEY,
+    PAYLOAD_KEY: PAYLOAD_KEY
   };
 })(typeof window !== 'undefined' ? window : globalThis);

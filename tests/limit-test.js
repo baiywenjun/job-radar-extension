@@ -197,6 +197,10 @@ async function main() {
     JSON.stringify(r.v && r.v.evidenceCheck));
   check('证据全部通过时不标红', r.v && !r.v.evidenceFlag, r.v && r.v.evidenceFlag);
   check('结论带 profileVersion', r.v && r.v.profileVersion >= 1);
+  /* verdicts 的主键是 [key, profileId]。少了 key 字段 put() 会抛 DataError，
+     整个缓存层就静默失效了——这条断言盯的就是那个字段。 */
+  check('结论带 key（复合主键第一位）', r.v && r.v.key === r.v.jobKey && !!r.v.key,
+    r.v && (r.v.key + ' / ' + r.v.jobKey));
   check('结论带 promptVersion', r.v && r.v.promptVersion === PR.PROMPT_VERSION);
   check('结论带 jdHash', !!(r.v && r.v.jdHash));
   check('结论带成本', r.v && r.v.cost === 0.00156, String(r.v && r.v.cost));

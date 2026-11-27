@@ -8,7 +8,7 @@
 <body>
 
 <header>
-  <div class="brand"><span class="dot"></span>岗位雷达<span class="edition">v0.2.5</span></div>
+  <div class="brand"><span class="dot"></span>岗位雷达<span class="edition">v0.2.6</span></div>
   <nav class="tabs">
     <button class="tab active" data-view="profiles">判定标准</button>
     <button class="tab" data-view="library">岗位库</button>
@@ -79,6 +79,22 @@
             <span class="msg" id="pfMsg"></span>
           </div>
         </form>
+
+        <!-- 试跑：改完标准立刻验证，不用去网站上碰运气。
+             用的是屏幕上这份（含未保存改动），不写库、不计入每日上限。 -->
+        <div class="dry" id="pfDry" style="display:none">
+          <div class="dry-head">
+            <b>试跑</b>
+            <span>粘贴一段 JD，用上面这份标准跑一次</span>
+          </div>
+          <textarea id="pfDryJd" rows="4" placeholder="把岗位正文粘到这里。试跑不写本地库、不计入每日上限、也不进缓存。"></textarea>
+          <div class="dry-actions">
+            <button type="button" class="btn primary sm" id="pfDryRun">开始试跑</button>
+            <button type="button" class="btn sm" id="pfDryClear" style="display:none">清空结果</button>
+            <span class="msg" id="pfDryMsg"></span>
+          </div>
+          <div class="dry-result" id="pfDryResult"></div>
+        </div>
       </div>
     </div>
   </section>
@@ -101,6 +117,7 @@
       </select>
       <button id="exportCsv" class="primary">导出 CSV</button>
       <button id="exportMd">导出 MD</button>
+      <button id="exportJson">导出 JSON</button>
     </div>
 
     <div class="tablewrap">
@@ -131,6 +148,18 @@
       <span class="sp"></span>
       <button id="clearAll">清空本地库</button>
     </footer>
+
+    <!-- 数据检查器：点表格里的职位名展开。
+         要回答的是「这条结论凭什么可信」——所以原始字段、字段来源、完整正文、
+         模型证据原文必须在同一屏里对着看。 -->
+    <div class="insp" id="inspector" style="display:none">
+      <div class="insp-head">
+        <button class="back" id="inspBack">← 返回列表</button>
+        <h3 id="inspTitle">岗位详情</h3>
+        <button class="btn sm" id="inspRejudge">重新判定</button>
+      </div>
+      <div class="insp-body" id="inspBody"></div>
+    </div>
   </section>
 
   <!-- ========== 设置 ========== -->
@@ -241,6 +270,25 @@
       </div>
 
       <div class="card">
+        <h4>发给模型的内容 <span class="tag">最近一次</span></h4>
+        <p class="sub">判得不对时先看这里：模型实际收到的是这两段文字。Key 只显示掩码，可整段复制。</p>
+        <div class="kv" id="stPayloadMeta"></div>
+        <details class="adv" id="stPayloadSystemBox">
+          <summary>system 提示词（角色与输出契约）</summary>
+          <div class="adv-body"><pre class="payload" id="stPayloadSystem"></pre></div>
+        </details>
+        <details class="adv" id="stPayloadUserBox">
+          <summary>user 内容（标准 + 字段 + 正文 + 可信度）</summary>
+          <div class="adv-body"><pre class="payload" id="stPayloadUser"></pre></div>
+        </details>
+        <div class="st-actions">
+          <button class="btn sm" id="stPayloadCopy">复制全文</button>
+          <button class="btn sm" id="stPayloadRefresh">刷新</button>
+          <span class="msg" id="stPayloadMsg"></span>
+        </div>
+      </div>
+
+      <div class="card">
         <h4>我的数据</h4>
         <p class="sub">配置与判定结果都在本机。清空岗位库不影响判定标准与 Key。</p>
         <div class="kv" id="stStats"></div>
@@ -257,6 +305,7 @@
 <script src="../common/db.js"></script>
 <script src="../common/settings.js"></script>
 <script src="../common/profiles.js"></script>
+<script src="export.js"></script>
 <script src="view-library.js"></script>
 <script src="view-profiles.js"></script>
 <script src="view-settings.js"></script>

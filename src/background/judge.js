@@ -713,6 +713,51 @@
     }
   }
 
+  /* 把「这次到底发了什么」留一份给人看。
+     Key 只以掩码形式出现——这段文本的用途就是被复制粘贴到别处，
+     一旦带上明文 Key，等于给它开了一条外泄通道。
+     整体包在 try 里：调试设施失败绝不能影响判定本身。 */
+  function recordPayload(ctx) {
+    var S = global.JR_SETTINGS;
+    var PR = global.JR_PROMPT;
+    if (!S || !S.saveLastPayload || !PR || !PR.buildPayload) return;
+    try {
+      var p = PR.buildPayload({
+        profile: ctx.profile,
+        fields: ctx.fields || {},
+        sources: ctx.sources || {},
+        jdText: ctx.jdText,
+        model: ctx.settings.model,
+        jobKey: ctx.jobKey
+      });
+      var r = S.saveLastPayload({
+        at: Date.now(),
+        dryRun: !!ctx.dryRun,
+        model: p.model,
+        baseOrigin: S.originOf ? S.originOf(ctx.settings.baseURL) : '',
+        keyMasked: S.maskKey ? S.maskKey(ctx.settings.apiKey) : '',
+        promptVersion: p.promptVersion,
+        meta: p.meta,
+        messages: p.messages
+      });
+      if (r && r.catch) r.catch(function () { /* 存不下就算了 */ });
+    } catch (e) { /* 同上 */ }
+  }
+
+  /* 试跑用的标准覆盖：屏幕上那份可能还没保存，
+     发出去的必须就是用户正在看的版本，否则「改一版 → 试跑 → 对比」这个循环是假的。 */
+  function overrideProfile(raw) {
+    raw = raw || {};
+    return {
+      id: String(raw.id || '').trim() || 'dryrun',
+      name: String(raw.name || '').trim() || '未命名试跑',
+      requirement: String(raw.requirement == null ? '' : raw.requirement),
+      mustHave: String(raw.mustHave == null ? '' : raw.mustHave),
+      redFlags: String(raw.redFlags == null ? '' : raw.redFlags),
+      version: Number(raw.version) || 0
+    };
+  }
+
   /* 证据核对 + 组装结论。核验放在这里而不是面板：
      落库的结论必须自带核对结果，缓存命中时才不会重新比一遍（也就不会漂）。 */
   function assembleVerdict(out, ctx) {
@@ -720,10 +765,18 @@
     var PR = global.JR_PROMPT;
     var v = out.verdict;
 
+    v.key = ctx.jobKey;   /* verdicts 的复合主键是 [key, profileId]。
+                             少这个字段 put() 会抛 DataError，而且被上层的 catch 吞掉，
+                             表现就是「缓存永远不命中、判定缓存数永远是 0」。 */
     v.jobKey = ctx.jobKey;
     v.profileId = ctx.profile.id;
     v.profileName = ctx.profile.name;
-    v.profileVersion = ctx.profile.version || 1;
+    /* 试跑用的是「屏幕上还没保存的那份」，版本号记 0；
+       强行补成 1 会让人以后回看时以为它对应某个已发布的版本。 */
+    (function () {
+      var pv = Number(ctx.profile.version);
+      v.profileVersion = isFinite(pv) && pv >= 0 ? pv : 1;
+    })();
     v.promptVersion = PR.PROMPT_VERSION;
     v.model = out.model || ctx.settings.model;
     v.jdHash = PR.jdHash(ctx.jdText);
@@ -734,6 +787,10 @@
     v.ms = out.ms;
     v.usage = out.usage;
     v.cost = estimateCost(ctx.settings, out.usage);
+
+    /* 试跑结论不进缓存、不进岗位库、不计费，但要能被调用方区分出来，
+       否则将来混进历史对比会污染「同一岗位的档位轨迹」。 */
+    if (ctx.dryRun) v.dryRun = true;
 
     var check = V.verifyEvidence(v, ctx.jdText);
     v.evidenceCheck = {
@@ -765,9 +822,15 @@
 
   /* 完整判定。input:
    *   { jobKey, fields, sources, jdText, profileId, onDelta, signal,
-   *     force, allowOverLimit, noCache }
+   *     force, allowOverLimit, noCache, dryRun, profileOverride }
    * 返回带元信息的 verdict（档位、分数、证据、模型、token、耗时、jdHash、
-   * cacheKey、evidenceCheck）；命中缓存时额外带 cached / cacheAgeMs。 */
+   * cacheKey、evidenceCheck）；命中缓存时额外带 cached / cacheAgeMs。
+   *
+   * dryRun（试跑）三条不同的行为，缺一条就会让「试跑结果」和「线上结果」对不上：
+   *   1. 不读缓存——改完提示词看的就是新结果，不是三天前的旧结论
+   *   2. 不受每日上限与 429 冷却拦截——试跑是人工、
+   *      单次动作，被限额挡住只会让人以为是配置坏了
+   *   3. 允许 profileOverride——用屏幕上那份（可能未保存的）标准 */
   function judgeJob(input) {
     input = input || {};
     var S = global.JR_SETTINGS;
@@ -779,12 +842,21 @@
       return Promise.reject(jerr('E_INTERNAL', '提示词或结论模块未加载'));
     }
 
+    var dryRun = !!input.dryRun;
     var jdText = String(input.jdText == null ? '' : input.jdText);
-    var jobKey = input.jobKey || '';
+    /* 试跑不属于任何岗位：即使调用方传了 jobKey 也要抹掉，
+       否则结论可能被写进某个岗位的缓存键或历史里。 */
+    var jobKey = dryRun ? '' : (input.jobKey || '');
+
+    if (dryRun && !jdText.trim()) {
+      return Promise.reject(jerr('E_NO_JD', '没有可试跑的岗位正文'));
+    }
 
     return Promise.all([S.get(), P.list()]).then(function (r) {
       var settings = r[0];
-      var profile = pickProfile(r[1] || [], input.profileId || settings.lastProfileId);
+      var profile = (dryRun && input.profileOverride)
+        ? overrideProfile(input.profileOverride)
+        : pickProfile(r[1] || [], input.profileId || settings.lastProfileId);
 
       if (!profile) {
         return Promise.reject(jerr('E_NO_PROFILE', '还没有判定标准，请先在扩展弹窗里新建一条'));
@@ -794,7 +866,9 @@
         ? PR.cacheKey({ jobKey: jobKey, profile: profile, model: settings.model, jdText: jdText })
         : '';
 
-      return readCache(jobKey, profile.id, cacheKey, jdText.length, input).then(function (hit) {
+      var cacheInput = dryRun ? merge(input, { force: true }) : input;
+
+      return readCache(jobKey, profile.id, cacheKey, jdText.length, cacheInput).then(function (hit) {
         if (hit) return hit;
 
         if (!settings.apiKey) {
@@ -811,7 +885,9 @@
           }
 
           var now = Date.now();
-          if (!input.allowOverLimit && Number(settings.rateLimitUntil) > now) {
+          /* dryRun 一律放行冷却与限额（见函数头注释第 2 条） */
+          var gate = !input.allowOverLimit && !dryRun;
+          if (gate && Number(settings.rateLimitUntil) > now) {
             throw jerr('E_COOLDOWN', '触发限流后冷却中，请稍后再试', {
               remainMs: Number(settings.rateLimitUntil) - now,
               rateLimitUntil: Number(settings.rateLimitUntil)
@@ -820,7 +896,7 @@
 
           return usedToday().then(function (used) {
             var limit = Number(settings.dailyLimit);
-            if (!input.allowOverLimit && limit > 0 && used >= limit) {
+            if (gate && limit > 0 && used >= limit) {
               throw jerr(
                 'E_LIMIT_DAY',
                 '今日已调用 ' + used + ' 次，达到上限 ' + limit,
@@ -835,6 +911,16 @@
               jdText: jdText
             });
 
+            recordPayload({
+              profile: profile,
+              fields: input.fields,
+              sources: input.sources || (input.fields && input.fields.sources),
+              jdText: jdText,
+              settings: settings,
+              jobKey: jobKey,
+              dryRun: dryRun
+            });
+
             return runAttempts({
               settings: settings,
               messages: messages,
@@ -846,7 +932,8 @@
                 profile: profile,
                 settings: settings,
                 jdText: jdText,
-                cacheKey: cacheKey
+                cacheKey: cacheKey,
+                dryRun: dryRun
               });
             }, function (e) {
               return armCooldown(e).then(function () { throw e; });

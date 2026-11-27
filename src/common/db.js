@@ -131,6 +131,37 @@
     });
   }
 
+  /* 局部更新，不涨 seenCount、不动 lastSeen。
+     用途：popup 的「重新判定」把新结论写回记录——它没有真的再看到这个岗位，
+     走 save() 会把「见到次数 +1」也算进去，挂牌天数与重复次数就被污染了。 */
+  function update(key, patch) {
+    return open().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction(STORE, 'readwrite');
+        var store = tx.objectStore(STORE);
+        var getReq = store.get(key);
+
+        getReq.onsuccess = function () {
+          var existing = getReq.result;
+          if (!existing) {
+            reject(new Error('记录不存在：' + key));
+            return;
+          }
+          var out = Object.assign({}, existing, patch || {});
+          out.key = key;
+          out.firstSeen = existing.firstSeen;
+          out.lastSeen = existing.lastSeen;
+          out.seenCount = existing.seenCount;
+          store.put(out);
+          tx.oncomplete = function () { resolve(out); };
+          tx.onerror = function () { reject(tx.error); };
+          tx.onabort = function () { reject(tx.error || new Error('transaction aborted')); };
+        };
+        getReq.onerror = function () { reject(getReq.error); };
+      });
+    });
+  }
+
   function remove(key) {
     return open().then(function (db) {
       return new Promise(function (resolve, reject) {
@@ -229,6 +260,19 @@
     });
   }
 
+  /* 全量判定结果，供导出与检查器按 key 关联。
+     量级是「岗位数 × 标准数」，个人使用不会大到需要分页。 */
+  function listAllVerdicts() {
+    return withStore(VERDICTS, 'readonly', function (store, set) {
+      var req = store.getAll();
+      req.onsuccess = function () {
+        var list = req.result || [];
+        list.sort(function (a, b) { return (b.createdAt || 0) - (a.createdAt || 0); });
+        set(list);
+      };
+    });
+  }
+
   function clearVerdicts() {
     return withStore(VERDICTS, 'readwrite', function (store, set) {
       store.clear();
@@ -295,12 +339,14 @@
     save: save,
     getOne: getOne,
     getAll: getAll,
+    update: update,
     remove: remove,
     clearAll: clearAll,
     count: count,
     putVerdict: putVerdict,
     getVerdict: getVerdict,
     listVerdicts: listVerdicts,
+    listAllVerdicts: listAllVerdicts,
     countVerdicts: countVerdicts,
     clearVerdicts: clearVerdicts,
     bumpUsage: bumpUsage,
