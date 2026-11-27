@@ -320,7 +320,10 @@ chrome.runtime.onConnect.addListener(function (port) {
         /* 落库失败不影响这次结论的展示 */
       });
     }).catch(function (e) {
-      var code = (e && e.code) || 'E_UNKNOWN';
+      /* 只认我们自己的字符串错误码。DOMException 的 code 是数字（abort=20），
+         直接透给面板会显示成「错误码 20 / signal is aborted without reason」。 */
+      var code = (e && typeof e.code === 'string' && /^E_[A-Z_]+$/.test(e.code))
+        ? e.code : 'E_UNKNOWN';
       post({
         type: 'FAIL',
         code: code,
@@ -335,6 +338,7 @@ chrome.runtime.onConnect.addListener(function (port) {
         streamed: !!(e && e.streamed),
         reasoningChars: (e && e.reasoningChars) || 0,
         usage: (e && e.usage) || null,
+        attempts: (e && e.attempts) || [],
         retryable: RETRYABLE[code] === 1
       });
     }).then(function () {

@@ -226,6 +226,17 @@
       out.push('  usage: in ' + (d.usage.prompt_tokens || 0) +
         ' / out ' + (d.usage.completion_tokens || 0));
     }
+    if (d.attempts && d.attempts.length) {
+      /* 重试链是定位「第一次为什么失败」的唯一线索：
+         最终报错往往只是最后一次的，而最早的成因才决定要不要改配置。 */
+      out.push('  尝试链:');
+      d.attempts.forEach(function (a, i) {
+        var bits = [(a.stream ? '流式' : '非流式'), 'max=' + a.maxTokens];
+        bits.push(a.ok ? '成功' : (a.code + (a.reason ? '/' + a.reason : '')));
+        bits.push((a.ms || 0) + 'ms');
+        out.push('    #' + (i + 1) + ' ' + bits.join(' · '));
+      });
+    }
     if (d.detail) out.push('  原始片段: ' + cut(d.detail, 280));
     return out;
   }

@@ -438,6 +438,7 @@
         streamed: !!(e && e.streamed),
         reasoningChars: (e && e.reasoningChars) || 0,
         usage: (e && e.usage) || null,
+        attempts: (e && e.attempts) || [],
         model: cfg && cfg.settings ? cfg.settings.model : '',
         baseOrigin: cfg && cfg.settings ? cfg.settings.baseOrigin : ''
       };

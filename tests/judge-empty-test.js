@@ -174,7 +174,9 @@ const JOB = {
   check('第一次是流式且用默认输出上限',
     calls[0].body.stream === true && calls[0].body.max_tokens === 1200,
     JSON.stringify({ stream: calls[0].body.stream, max: calls[0].body.max_tokens }));
-  check('重试改为非流式', calls[1] && calls[1].body.stream === false,
+  /* thinking 场景下流式是正常的（有 reasoning 帧在流动），
+     改非流式只会更慢、更容易撞超时 —— 所以应当保持流式，只放大预算 */
+  check('thinking 重试保持流式', calls[1] && calls[1].body.stream === true,
     JSON.stringify(calls[1] && calls[1].body.stream));
   check('重试把输出上限放大到 4096',
     calls[1] && calls[1].body.max_tokens === 4096,
@@ -238,8 +240,16 @@ const JOB = {
   check('成因是 no-frames', err && err.reason === 'no-frames', err && err.reason);
   check('只重试一次，不无限烧钱', calls.length === 2, String(calls.length));
   check('最终文案写明已放大输出上限重试',
-    err && /已放大输出上限至 \d+ 并改用非流式重试/.test(err.message),
+    err && /已放大输出上限至 \d+ tokens 重试/.test(err.message),
     err && err.message);
+  check('no-frames 重试改为非流式',
+    calls[1] && calls[1].body.stream === false,
+    JSON.stringify(calls[1] && calls[1].body.stream));
+  check('失败时带出尝试链', err && err.attempts && err.attempts.length === 2,
+    JSON.stringify(err && err.attempts));
+  check('尝试链记下每次的错误码', err && err.attempts &&
+    err.attempts[0].code === 'E_EMPTY' && err.attempts[1].code === 'E_EMPTY',
+    JSON.stringify(err && err.attempts && err.attempts.map((a) => a.code)));
 
   /* ---------- 4. 正文被截断（有内容但不是合法 json）仍走 E_BAD_JSON ---------- */
   installFetch((body, n) => {

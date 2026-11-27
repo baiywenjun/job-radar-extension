@@ -21,6 +21,10 @@
   function jerr(code, message, extra) {
     var e = new Error(message || code);
     e.code = code;
+    /* 业务错误的标记。DOMException 也有数字 code（ABORT_ERR=20），
+       只判 e.code 存在会把 abort 当成业务错误直接抛给上层，
+       结果面板上出现「错误码 20 / signal is aborted without reason」。 */
+    e.jr = true;
     if (extra) for (var k in extra) if (Object.prototype.hasOwnProperty.call(extra, k)) e[k] = extra[k];
     return e;
   }
@@ -87,7 +91,7 @@
    *   2. 一个 JSON 被拆在两个 chunk 之间
    *   3. 网关无视 stream 参数，直接返回完整 JSON
    */
-  function readSSE(stream, onDelta) {
+  function readSSE(stream, onDelta, onActivity) {
     var reader = stream.getReader();
     var decoder = new TextDecoder('utf-8');
     var buf = '';
@@ -151,6 +155,8 @@
         var piece = decoder.decode(r.value, { stream: true });
         raw += piece;
         buf += piece;
+        /* 有数据在流动就说明没卡死，重新计空闲超时 */
+        if (onActivity) onActivity();
         var parts = buf.split('\n\n');
         buf = parts.pop();
         for (var i = 0; i < parts.length; i++) handleFrame(parts[i]);
@@ -191,12 +197,17 @@
   }
 
   /* 发一次 chat/completions。
-     opts.signal 用于「切换岗位即取消」；超时用独立的 AbortController，
-     两者要能区分：外部取消不该显示成"超时"。 */
+     opts.signal   用于「切换岗位即取消」；超时用独立的 AbortController，两者要能区分。
+     opts.timeoutMs 覆盖设置里的超时（重试时放宽用）。
+     流式响应用「空闲超时」：每收到一块数据就重新计时。整体超时会把
+     正常的慢速长输出误杀——思考型模型写满 4096 tokens 常常超过 30 秒。 */
   function chat(opts) {
     var s = opts.settings;
     var url = endpoint(s.baseURL);
-    var timeoutMs = Number(s.timeoutMs) || 30000;
+    var timeoutMs = Number(opts.timeoutMs != null ? opts.timeoutMs : s.timeoutMs) || 30000;
+    /* 非流式请求是「一次性等完」，没有数据流动可依，必须给足时间；
+       老版本默认 30s 会稳定杀掉思考型模型的长输出。 */
+    if (opts.minTimeoutMs) timeoutMs = Math.max(timeoutMs, Number(opts.minTimeoutMs) || 0);
     var streaming = !!opts.stream;
     var body = {
       model: s.model,
@@ -220,13 +231,17 @@
     var aborted = false;
     var external = opts.signal;
 
+    function armTimer() {
+      if (!ctrl) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(function () {
+        timedOut = true;
+        try { ctrl.abort(); } catch (e) { /* 已结束 */ }
+      }, timeoutMs);
+    }
+
     var p = new Promise(function (resolve, reject) {
-      if (ctrl) {
-        timer = setTimeout(function () {
-          timedOut = true;
-          try { ctrl.abort(); } catch (e) { /* 已结束 */ }
-        }, timeoutMs);
-      }
+      armTimer();
 
       if (external) {
         if (external.aborted) {
@@ -256,7 +271,7 @@
         }
 
         if (streaming && res.body && typeof res.body.getReader === 'function') {
-          return readSSE(res.body, opts.onDelta).then(function (out) {
+          return readSSE(res.body, opts.onDelta, armTimer).then(function (out) {
             resolve({
               data: {
                 model: out.model,
@@ -284,12 +299,15 @@
           resolve({ data: data, ms: Date.now() - started, streamed: false });
         });
       }).catch(function (e) {
-        if (e && e.code) {
+        /* 只放行我们自己造的错（e.jr）。DOMException 也带数字 code
+           （ABORT_ERR=20），按 e.code 真值判断会把 abort 原样抛给上层，
+           面板就显示成「错误码 20 / signal is aborted without reason」。 */
+        if (e && e.jr) {
           reject(e);
           return;
         }
         var msg = String((e && e.message) || '');
-        if (aborted || (e && e.name === 'AbortError') || /abort/i.test(msg)) {
+        if (aborted || timedOut || (e && e.name === 'AbortError') || /abort/i.test(msg)) {
           if (aborted && !timedOut) {
             reject(jerr('E_ABORT', '判定已取消'));
             return;
@@ -450,6 +468,8 @@
       jsonMode: cfg.jsonMode,
       onDelta: ctx.onDelta,
       signal: ctx.signal,
+      timeoutMs: cfg.timeoutMs,
+      minTimeoutMs: cfg.stream ? 0 : 45000,
       maxTokens: cfg.maxTokens || ctx.settings.maxOutputTokens
     }).then(function (r) {
       var content = pickContent(r.data);
@@ -503,15 +523,44 @@
     var cfg = {
       jsonMode: ctx.settings.jsonModeSupported !== false,
       stream: !!ctx.settings.stream,
-      streamUsage: true
+      streamUsage: true,
+      timeoutMs: Number(ctx.settings.timeoutMs) || 30000
     };
     var parseRetried = false;
     var emptyRetried = false;
     var emptyFirst = null;
     var jsonDegraded = false;
+    var attempts = [];
+
+    function snap() {
+      return {
+        stream: !!cfg.stream,
+        maxTokens: cfg.maxTokens || ctx.settings.maxOutputTokens,
+        timeoutMs: cfg.timeoutMs
+      };
+    }
+
+    function fail(e) {
+      e.attempts = attempts;
+      throw e;
+    }
 
     function step() {
-      return attemptOnce(ctx, cfg).catch(function (e) {
+      var base = snap();
+      var t0 = Date.now();
+
+      return attemptOnce(ctx, cfg).then(function (r) {
+        attempts.push({ stream: base.stream, maxTokens: base.maxTokens, ok: true, ms: Date.now() - t0 });
+        return r;
+      }).catch(function (e) {
+        attempts.push({
+          stream: base.stream,
+          maxTokens: base.maxTokens,
+          code: (e && e.code) || 'E_UNKNOWN',
+          reason: (e && e.reason) || '',
+          ms: Date.now() - t0
+        });
+
         var detail = String((e && e.detail) || '');
 
         if (e.code === 'E_BAD_REQUEST' && cfg.jsonMode &&
@@ -530,13 +579,14 @@
           return step();
         }
 
-        /* 空内容：换非流式（排除网关不认 SSE）+ 放大输出预算
-           （思考型模型会把 reasoning 写满 max_tokens，正文一个字都写不出来）。
-           只重试一次：预算翻倍后还空，就是模型或 Key 的问题，继续试只是烧钱。 */
+        /* 空内容：放大输出预算，并按成因决定要不要改传输方式。
+           thinking / length 的场景里流式是正常的（有 reasoning 帧在流动），
+           改非流式只会更慢、更容易撞超时；只有「一帧都没收到」才需要换非流式。
+           超时同时放宽：写满 4096 tokens 的思考模型，30 秒不够。 */
         if (e.code === 'E_EMPTY') {
           if (!emptyRetried) {
             emptyRetried = true;
-            /* 保留首次成因：重试改成非流式后，成因往往退化成 "empty"，
+            /* 保留首次成因：重试后成因往往退化成 "empty"，
                而最早的 no-frames / thinking 才是用户需要看到的线索。 */
             emptyFirst = {
               reason: e.reason,
@@ -546,12 +596,14 @@
               frames: e.frames,
               reasoningChars: e.reasoningChars
             };
-            cfg.stream = false;
-            var base = Number(ctx.settings.maxOutputTokens) || 1200;
+            if (e.reason === 'no-frames' || e.reason === 'empty' || !e.reason) {
+              cfg.stream = false;
+            }
             var want = (e.reason === 'thinking' || e.reason === 'length' || e.reason === 'no-frames')
-              ? Math.max(base * 2, 4096)
-              : Math.max(base * 2, 1600);
+              ? Math.max((Number(ctx.settings.maxOutputTokens) || 1200) * 2, 4096)
+              : Math.max((Number(ctx.settings.maxOutputTokens) || 1200) * 2, 1600);
             cfg.maxTokens = Math.min(want, 8192);
+            cfg.timeoutMs = Math.max(cfg.timeoutMs, 90000);
             return step();
           }
           if (emptyFirst) {
@@ -562,11 +614,11 @@
             e.frames = emptyFirst.frames || e.frames;
             e.reasoningChars = emptyFirst.reasoningChars || e.reasoningChars;
             e.message = (EMPTY_TEXT[e.reason] || e.message) +
-              '（已放大输出上限至 ' + cfg.maxTokens + ' 并改用非流式重试）';
+              '（已放大输出上限至 ' + cfg.maxTokens + ' tokens 重试）';
           } else {
-            e.message += '（已放大输出上限至 ' + cfg.maxTokens + ' 并改用非流式重试）';
+            e.message += '（已放大输出上限至 ' + cfg.maxTokens + ' tokens 重试）';
           }
-          throw e;
+          fail(e);
         }
 
         /* 格式类失败只再试一次，且换成最保守的组合：非流式 + 不带 json 模式 */
@@ -574,10 +626,11 @@
           parseRetried = true;
           cfg.stream = false;
           cfg.jsonMode = false;
+          cfg.timeoutMs = Math.max(cfg.timeoutMs, 90000);
           return step();
         }
 
-        throw e;
+        fail(e);
       });
     }
 

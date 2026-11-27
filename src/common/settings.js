@@ -17,7 +17,7 @@
     model: 'deepseek-chat',
     temperature: 0.2,
     maxOutputTokens: 1200,
-    timeoutMs: 30000,
+    timeoutMs: 60000,
     stream: true,
     priceInPerM: 0,
     priceOutPerM: 0,
